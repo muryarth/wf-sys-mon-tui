@@ -69,6 +69,36 @@ function Register-Command {
     }
 }
 
+$sudo     = Join-Path $env:SystemRoot 'System32\sudo.exe'
+$sudoKey  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo'
+function Get-SudoMode { (Get-ItemProperty $sudoKey -ErrorAction SilentlyContinue).Enabled }
+
+# A TUI so abre no mesmo terminal com o sudo do Windows em modo Inline (Enabled = 3).
+function Enable-InlineSudo {
+    if (-not (Test-Path $sudo)) {
+        Write-Host '    sudo do Windows indisponivel (requer Windows 11 24H2+). A TUI abrira em uma nova janela,' -ForegroundColor Yellow
+        Write-Host '    a menos que o terminal ja esteja aberto como administrador.' -ForegroundColor Yellow
+        return
+    }
+    if ((Get-SudoMode) -eq 3) { Write-Ok 'sudo inline ja habilitado.'; return }
+
+    Write-Host ''
+    Write-Host '    Para abrir a TUI no mesmo terminal, o sudo do Windows precisa estar no modo Inline.' -ForegroundColor Yellow
+    Write-Host '    Isso vale para todo o sistema: qualquer comando com sudo passa a rodar elevado no' -ForegroundColor Yellow
+    Write-Host '    terminal atual (o UAC continua pedindo confirmacao).' -ForegroundColor Yellow
+    $answer = Read-Host '    Habilitar o sudo inline agora? [S/n]'
+    if ($answer -and $answer -notmatch '^[sSyY]') { Write-Ok 'Mantido como esta; a TUI abrira em uma nova janela.'; return }
+
+    Write-Step 'Habilitando sudo inline (confirme no UAC)...'
+    try {
+        Start-Process $sudo -ArgumentList 'config', '--enable', 'normal' -Verb RunAs -Wait -WindowStyle Hidden
+    }
+    catch { Write-Host "    nao foi possivel habilitar: $($_.Exception.Message)" -ForegroundColor Yellow; return }
+
+    if ((Get-SudoMode) -eq 3) { Write-Ok 'sudo inline habilitado.' }
+    else { Write-Host '    sudo inline nao foi habilitado. Ative em Configuracoes > Sistema > Para desenvolvedores > sudo (modo Embutido).' -ForegroundColor Yellow }
+}
+
 # ------------------------------------------------------------------ dependencias
 
 if ($Install) { Write-Step 'Registrando o comando wf-sys-mon...'; Register-Command }
@@ -88,7 +118,11 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue) -and -not (Test-Path $gh
     Install-WingetPackage 'GitHub.cli' 'GitHub CLI'
 }
 
-if ($Install) { Write-Ok 'Pronto! Use o comando wf-sys-mon em um novo terminal.'; exit 0 }
+if ($Install) {
+    Enable-InlineSudo
+    Write-Ok 'Pronto! Use o comando wf-sys-mon em um novo terminal.'
+    exit 0
+}
 
 # ------------------------------------------------------------------ execucao
 
@@ -96,13 +130,14 @@ if ($Install) { Write-Ok 'Pronto! Use o comando wf-sys-mon em um novo terminal.'
 # neste mesmo terminal; caso contrario o proprio app solicita UAC e abre um novo console.
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-$sudo = Join-Path $env:SystemRoot 'System32\sudo.exe'
-$sudoMode = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo' -ErrorAction SilentlyContinue).Enabled
 
-if (-not $isAdmin -and (Test-Path $sudo) -and $sudoMode -eq 3) {
+if (-not $isAdmin -and (Test-Path $sudo) -and (Get-SudoMode) -eq 3) {
     & $sudo $dotnet $dll @AppArgs
 }
 else {
+    if (-not $isAdmin -and (Test-Path $sudo)) {
+        Write-Host 'A TUI abrira em uma nova janela. Para usar este terminal, rode: wf-sys-mon -Install' -ForegroundColor DarkGray
+    }
     & $dotnet $dll @AppArgs
 }
 exit $LASTEXITCODE
