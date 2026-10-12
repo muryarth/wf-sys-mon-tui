@@ -77,6 +77,7 @@ O `-Install`:
 1. Instala via winget o que faltar: .NET 10 SDK e GitHub CLI.
 2. Compila o app em `out\`.
 3. Cria o atalho `%USERPROFILE%\bin\wf-sys-mon.cmd` e adiciona essa pasta ao `PATH` do usuário.
+4. Oferece habilitar o [sudo do Windows](https://learn.microsoft.com/windows/sudo/) em modo *Inline*, para a TUI abrir no mesmo terminal (pede confirmação e UAC).
 
 Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
@@ -96,7 +97,9 @@ alias wf-sys-mon='powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/cam
 wf-sys-mon
 ```
 
-Aceite o pedido de administrador. Se o [sudo do Windows](https://learn.microsoft.com/windows/sudo/) estiver habilitado em modo *Inline* (`sudo config --enable normal`, como administrador), a TUI abre no próprio terminal; caso contrário, o UAC abre uma nova janela.
+Aceite o pedido de administrador. A TUI abre **no próprio terminal** quando o [sudo do Windows](https://learn.microsoft.com/windows/sudo/) está em modo *Inline*, o que o `-Install` oferece configurar, ou quando o terminal já está aberto como administrador. Caso contrário, o UAC abre a TUI numa nova janela.
+
+> O modo *Inline* do sudo exige Windows 11 24H2 ou superior e vale para o sistema todo: comandos com `sudo` passam a rodar elevados no terminal atual. Para ativá-lo manualmente: *Configurações → Sistema → Para desenvolvedores → sudo*, modo **Embutido**, ou `sudo config --enable normal` num terminal de administrador.
 
 | Tecla | Ação |
 |---|---|
@@ -181,6 +184,7 @@ src/
 | `wf-sys-mon` não é reconhecido | Abra um novo terminal após o `-Install`. Confira se `%USERPROFILE%\bin` está no `PATH`. |
 | "O sistema não pode encontrar o caminho especificado" | A pasta do projeto foi movida ou renomeada. Rode `.\wf-sys-mon.cmd -Install` na nova pasta. |
 | Erro `0x800711C7` ao abrir | O **Smart App Control** bloqueou a DLL recompilada (ele libera arquivos pelo hash). Desative-o em *Segurança do Windows → Controle de aplicativos e navegador*. |
+| A TUI abre numa janela separada | O sudo não está em modo *Inline*. Rode `wf-sys-mon -Install` e aceite habilitá-lo. No Windows 10 ou Windows 11 anterior ao 24H2 (sem sudo), abra o terminal como administrador. |
 | Temperaturas aparecem vazias | O app não está rodando como administrador. |
 | Falha ao recompilar | O app ainda está aberto e bloqueia os arquivos em `out\`. Feche-o e tente de novo. |
 | Painel do Copilot com "conta sem Copilot" | A conta conectada não tem assinatura do Copilot. |
