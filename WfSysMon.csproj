@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Framework-dependent: executado via dotnet.exe (assinado pela Microsoft),
+         o que evita o bloqueio do Smart App Control. Requer .NET 10 Runtime. -->
+    <SelfContained>false</SelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>WfSysMon</AssemblyName>
+    <RootNamespace>WfSysMon</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+    <PackageReference Include="Spectre.Console" Version="0.49.1" />
+  </ItemGroup>
+
+</Project>
