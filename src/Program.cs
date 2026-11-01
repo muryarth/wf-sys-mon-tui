@@ -139,6 +139,7 @@ static class Program
             var lastAuth = auth.State;
             var lastUpdate = updater.State;
             DateTime? installedAt = null;
+            var lastClockSecond = -1L;
             var dirty = false;
             var clearFirst = false;
             var lastAnimation = DateTime.Now;
@@ -215,6 +216,14 @@ static class Program
                 if (!ReferenceEquals(astate, lastAuth))
                 {
                     lastAuth = astate;
+                    dirty = true;
+                }
+
+                // O relogio tem ritmo proprio: redesenha quando o segundo muda, seja qual for o resto da tela.
+                var clockSecond = DateTime.Now.Ticks / TimeSpan.TicksPerSecond;
+                if (clockSecond != lastClockSecond)
+                {
+                    lastClockSecond = clockSecond;
                     dirty = true;
                 }
 

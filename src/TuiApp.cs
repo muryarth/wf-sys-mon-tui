@@ -181,6 +181,17 @@ sealed class TuiApp(UiActions actions)
 
         var tabRow = "";
         var tabWidth = 0;
+
+        void TabArrow(string arrow, int step)
+        {
+            var key = Dashboard.Key(arrow);
+            var w = Screen.CellWidth(Markup.Remove(key));
+            frame.Regions.Add(new HitArea(left + tabWidth, 0, w, 1, () => MoveTab(step)));
+            tabRow += key + " ";
+            tabWidth += w + 1;
+        }
+
+        TabArrow("←", -1);
         foreach (var (label, page) in tabs)
         {
             var text = $" {label} ";
@@ -191,14 +202,18 @@ sealed class TuiApp(UiActions actions)
             tabRow += $"[{style}]{Markup.Escape(text)}[/] ";
             tabWidth += w + 1;
         }
+        TabArrow("→", 1);
 
         var language = Languages.First(l => l.Code == S.Language).Name;
-        var buttons = new (string Markup, Action Action, bool IsLanguage)[]
-        {
+        (string Markup, Action Action, bool IsLanguage)[] buttons =
+        [
+            .. (_page is Page.Accounts or Page.Settings
+                ? new (string, Action, bool)[] { (Button("↑↓", T("Navegar", "Navigate")), () => MoveSelection(1), false) }
+                : Array.Empty<(string, Action, bool)>()),
             (Button("R", T("Atualizar", "Refresh")), Refresh, false),
             ($"{Dashboard.Key("L")} [{Theme.Value} on {Theme.Selected}] {Markup.Escape(language)}  ▾ [/]", OpenLanguageList, true),
             (Button("Q", T("Sair", "Quit")), actions.Quit, false),
-        };
+        ];
 
         const int gap = 3;
         var widths = buttons.Select(b => Screen.CellWidth(Markup.Remove(b.Markup))).ToList();
@@ -274,25 +289,23 @@ sealed class TuiApp(UiActions actions)
     // Pouco espaco horizontal: uma coluna so, usando toda a largura. Com espaco: uma coluna por secao,
     // de tamanhos iguais, limitadas a MaxColumnWidth e centralizadas lado a lado. Com todos os agentes
     // ocultos, a secao de IA nao existe e o hardware fica sozinho, centralizado.
-    // A ultima celula do terminal fica livre: o "apagar ate o fim da linha" do desenho apagaria o que
-    // estivesse nela, como a barra de rolagem, porque o cursor continua ali depois de escrever.
+    // A ultima celula de cada coluna e da barra de rolagem e fica vazia sem rolagem: a margem conta com ela.
     static List<ColumnPlan> PlanColumns(int width, int height)
     {
-        width--;
         var columnWidth = (width - ColumnGap) / 2;
         var narrow = IsVertical(width, height) || columnWidth < MinColumnWidth;
 
         if (!S.AnyAgentVisible)
         {
             var alone = narrow ? width : Math.Min(width, MaxColumnWidth);
-            return [new ColumnPlan("all", (width - alone) / 2, alone, ["hardware"])];
+            return [new ColumnPlan("all", (width - alone + 1) / 2, alone, ["hardware"])];
         }
 
         if (narrow)
             return [new ColumnPlan("all", 0, width, ["hardware", "ai"])];
 
         columnWidth = Math.Min(columnWidth, MaxColumnWidth);
-        var left = (width - (columnWidth * 2 + ColumnGap)) / 2;
+        var left = (width - (columnWidth * 2 + ColumnGap) + 1) / 2;
         return
         [
             new ColumnPlan("hardware", left, columnWidth, ["hardware"]),
@@ -912,6 +925,13 @@ sealed class TuiApp(UiActions actions)
         Open(Tabs[(index + step + Tabs.Length) % Tabs.Length]);
     }
 
+    void MoveSelection(int step)
+    {
+        if (_items.Count == 0) return;
+        _selected = (_selected + step + _items.Count) % _items.Count;
+        Dirty = true;
+    }
+
     void Scroll(string key, int delta)
     {
         _scroll[key] = Math.Max(_scroll.GetValueOrDefault(key) + delta, 0);
@@ -1004,8 +1024,8 @@ sealed class TuiApp(UiActions actions)
             case ConsoleKey.R when _page != Page.Confirm: Refresh(); break;
             case ConsoleKey.S when _page == Page.Accounts: Open(Page.Settings); break;
             case ConsoleKey.A when _page == Page.Settings: Open(Page.Accounts); break;
-            case ConsoleKey.UpArrow when _items.Count > 0: _selected = (_selected - 1 + _items.Count) % _items.Count; Dirty = true; break;
-            case ConsoleKey.DownArrow or ConsoleKey.Tab when _items.Count > 0: _selected = (_selected + 1) % _items.Count; Dirty = true; break;
+            case ConsoleKey.UpArrow: MoveSelection(-1); break;
+            case ConsoleKey.DownArrow or ConsoleKey.Tab: MoveSelection(1); break;
             case ConsoleKey.Enter or ConsoleKey.Spacebar when _selected < _items.Count: _items[_selected](); Dirty = true; break;
             case ConsoleKey.Q when _page != Page.Confirm: actions.Quit(); break;
             case ConsoleKey.S or ConsoleKey.Y when _page == Page.Confirm: AcceptConfirm(); break;
