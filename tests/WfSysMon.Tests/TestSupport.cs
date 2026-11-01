@@ -16,6 +16,13 @@ static class TestEnvironment
     {
         AppPaths.DataDir = Path.Combine(Path.GetTempPath(), "wf-sys-mon-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(AppPaths.DataDir);
+
+        // Claude Code falso, com a status line ja configurada: nada le ou altera o ~/.claude real.
+        var claudeConfig = Path.Combine(AppPaths.DataDir, "claude");
+        Directory.CreateDirectory(claudeConfig);
+        File.WriteAllText(Path.Combine(claudeConfig, "settings.json"), "{\"statusLine\":{\"type\":\"command\",\"command\":\"claude-statusline.ps1\"}}");
+        Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", claudeConfig);
+
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             try { Directory.Delete(AppPaths.DataDir, true); }

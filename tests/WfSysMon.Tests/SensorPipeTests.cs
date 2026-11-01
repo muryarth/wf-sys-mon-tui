@@ -8,7 +8,8 @@ using Xunit;
 public class SensorPipeTests
 {
     static readonly SecurityIdentifier Me = WindowsIdentity.GetCurrent().User!;
-    static readonly SecurityIdentifier[] TrustMe = [Me];
+    // Em processo elevado (como na CI) o dono do pipe e o grupo Administradores, nao a conta.
+    static readonly SecurityIdentifier[] TrustMe = [Me, new(WellKnownSidType.BuiltinAdministratorsSid, null)];
 
     static string PipeName() => "wf-test-" + Guid.NewGuid().ToString("N")[..8];
 
