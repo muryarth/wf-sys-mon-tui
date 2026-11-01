@@ -47,15 +47,13 @@ sealed partial class GitHubAuth : IDisposable
             return T("GitHub CLI não encontrado", "GitHub CLI not found");
 
         psi.RedirectStandardInput = true;
-        using var proc = Process.Start(psi);
-        if (proc is null) return T("falha ao iniciar o gh", "could not start gh");
-
-        proc.StandardInput.Close();
-        _ = proc.StandardOutput.ReadToEndAsync();
-        var error = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        return proc.ExitCode == 0 ? null : error.Trim();
+        var result = await ExternalTool.RunAsync(psi, LogoutLimit);
+        if (result is null) return T("falha ao iniciar o gh", "could not start gh");
+        if (result.TimedOut) return T("o gh não respondeu", "gh did not respond");
+        return result.ExitCode == 0 ? null : result.Error.Trim();
     }
+
+    static readonly TimeSpan LogoutLimit = TimeSpan.FromSeconds(30);
 
     async Task RunAsync()
     {
@@ -115,19 +113,8 @@ sealed partial class GitHubAuth : IDisposable
         var psi = ExternalTool.PrepareHidden("winget",
             "install --id GitHub.cli -e --silent --accept-source-agreements --accept-package-agreements")
             ?? throw new InvalidOperationException(T("winget indisponível; instale o GitHub CLI: https://cli.github.com", "winget unavailable; install GitHub CLI: https://cli.github.com"));
-        Process? proc;
-        try { proc = Process.Start(psi); }
-        catch (System.ComponentModel.Win32Exception)
-        {
+        if (await ExternalTool.RunAsync(psi, ExternalTool.InstallLimit) is null)
             throw new InvalidOperationException(T("winget indisponível; instale o GitHub CLI: https://cli.github.com", "winget unavailable; install GitHub CLI: https://cli.github.com"));
-        }
-        using (proc)
-        {
-            if (proc is null) throw new InvalidOperationException(T("falha ao iniciar o winget", "could not start winget"));
-            _ = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
-        }
     }
 
     // explorer.exe abre a URL no navegador padrao do usuario sem herdar a elevacao de administrador.

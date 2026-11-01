@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -126,7 +125,7 @@ sealed class CopilotUsage : IDisposable
 
     async Task<CopilotSnapshot> FetchAsync(CancellationToken ct)
     {
-        _token ??= ResolveToken()
+        _token ??= await ResolveTokenAsync(ct)
             ?? throw new NotAuthenticatedException(NotConnectedMessage);
 
         using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/copilot_internal/user");
@@ -174,70 +173,42 @@ sealed class CopilotUsage : IDisposable
 
     internal static CopilotSnapshot Parse(JsonElement root)
     {
-        var plan = Str(root, "copilot_plan") ?? Str(root, "access_type_sku") ?? "desconhecido";
-        var tbb = Bool(root, "token_based_billing") ?? false;
+        var plan = JsonRead.Str(root, "copilot_plan") ?? JsonRead.Str(root, "access_type_sku") ?? "desconhecido";
+        var tbb = JsonRead.Bool(root, "token_based_billing") ?? false;
 
         DateTime? reset = null;
-        var resetStr = Str(root, "quota_reset_date_utc") ?? Str(root, "quota_reset_date");
+        var resetStr = JsonRead.Str(root, "quota_reset_date_utc") ?? JsonRead.Str(root, "quota_reset_date");
         if (DateTime.TryParse(resetStr, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var r))
             reset = r;
 
-        if (!root.TryGetProperty("quota_snapshots", out var snaps) ||
-            !snaps.TryGetProperty("premium_interactions", out var p))
+        if (JsonRead.Obj(root, "quota_snapshots") is not { } snaps || JsonRead.Obj(snaps, "premium_interactions") is not { } p)
             throw new InvalidOperationException(T("resposta do Copilot sem dados de cota", "Copilot response has no quota data"));
 
-        var unlimited = Bool(p, "unlimited") ?? false;
-        var entitlement = Num(p, "entitlement") ?? 0;
-        var remaining = Num(p, "quota_remaining") ?? Num(p, "remaining") ?? 0;
-        var pctRemaining = Num(p, "percent_remaining") ?? (entitlement > 0 ? remaining / entitlement * 100 : 100);
-        var used = Num(p, "credits_used") is { } cu && (Bool(p, "token_based_billing") ?? tbb)
+        var unlimited = JsonRead.Bool(p, "unlimited") ?? false;
+        var entitlement = JsonRead.Num(p, "entitlement") ?? 0;
+        var remaining = JsonRead.Num(p, "quota_remaining") ?? JsonRead.Num(p, "remaining") ?? 0;
+        var pctRemaining = JsonRead.Num(p, "percent_remaining") ?? (entitlement > 0 ? remaining / entitlement * 100 : 100);
+        var used = JsonRead.Num(p, "credits_used") is { } cu && (JsonRead.Bool(p, "token_based_billing") ?? tbb)
             ? cu
             : Math.Max(0, entitlement - remaining);
 
-        var extraBudget = Bool(p, "overage_permitted") == true ? Num(p, "overage_entitlement") ?? 0 : 0;
+        var extraBudget = JsonRead.Bool(p, "overage_permitted") == true ? JsonRead.Num(p, "overage_entitlement") ?? 0 : 0;
 
-        return new CopilotSnapshot(plan, Bool(p, "token_based_billing") ?? tbb, unlimited,
+        return new CopilotSnapshot(plan, JsonRead.Bool(p, "token_based_billing") ?? tbb, unlimited,
             entitlement, used, remaining, pctRemaining, extraBudget, reset, DateTime.Now);
     }
 
-    static string? Str(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-    static bool? Bool(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.GetBoolean() : null;
-
-    static double? Num(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
-
     // Ordem: GH_TOKEN, GITHUB_TOKEN, 'gh auth token'.
-    static string? ResolveToken()
+    static async Task<string?> ResolveTokenAsync(CancellationToken ct)
     {
         foreach (var env in new[] { "GH_TOKEN", "GITHUB_TOKEN" })
             if (Environment.GetEnvironmentVariable(env) is { Length: > 0 } t) return t.Trim();
 
-        try
-        {
-            if (GitHubAuth.FindGh() is not { } gh) return null;
-            var psi = new ProcessStartInfo(gh, "auth token --hostname github.com")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Environment.SystemDirectory,
-            };
-            using var proc = Process.Start(psi);
-            if (proc is null) return null;
-            _ = proc.StandardError.ReadToEndAsync();
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(5000);
-            return proc.ExitCode == 0 && output.Length > 0 ? output : null;
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
+        if (ExternalTool.PrepareHidden("gh", "auth token --hostname github.com", GitHubAuth.GhDirs) is not { } psi) return null;
+
+        var result = await ExternalTool.RunAsync(psi, TimeSpan.FromSeconds(10), ct);
+        return result is { ExitCode: 0, Output: var output } && output.Trim() is { Length: > 0 } token ? token : null;
     }
 
     public void Dispose()

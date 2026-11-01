@@ -68,6 +68,8 @@ sealed class TuiApp(UiActions actions)
     string[] _confirmLines = [];
     Action? _confirmYes;
     bool _claudeLoginPending;
+    DateTime _claudeLoginGivesUpAt;
+    internal TimeSpan ClaudeLoginWait { get; set; } = TimeSpan.FromMinutes(5);
     DateTime _nextClaudeCheck;
     readonly DateTime _startedAt = DateTime.Now;
     StatusLineState _statusLine;
@@ -106,6 +108,9 @@ sealed class TuiApp(UiActions actions)
             _nextStatusLineRead = DateTime.Now.AddSeconds(5);
         }
         OpenPendingOnFirstRun(data);
+
+        // Janela de login fechada sem concluir: para de consultar. A aba Contas volta a oferecer o login.
+        if (_claudeLoginPending && DateTime.Now >= _claudeLoginGivesUpAt) _claudeLoginPending = false;
 
         if (_claudeLoginPending && DateTime.Now >= _nextClaudeCheck)
         {
@@ -363,10 +368,12 @@ sealed class TuiApp(UiActions actions)
         {
             var thumbSize = Math.Max(height * height / lines.Count, 1);
             var thumbTop = (height - thumbSize) * offset / max;
+            var thumb = Line("[white]┃[/]", 3);
+            var track = Line($"[{Theme.PanelBorder}]│[/]", 3);
             for (var i = 0; i < height && y + i < frame.Height; i++)
             {
                 var inThumb = i >= thumbTop && i < thumbTop + thumbSize;
-                Put(frame, y + i, x + contentWidth, 1, Line(inThumb ? "[white]┃[/]" : $"[{Theme.PanelBorder}]│[/]", 3), erase: false);
+                Put(frame, y + i, x + contentWidth, 1, inThumb ? thumb : track, erase: false);
             }
             var key = column.Key;
             frame.Regions.Add(new HitArea(x + contentWidth, y, 1, Math.Max(thumbTop, 0), () => Scroll(key, -height + 1)));
@@ -776,6 +783,7 @@ sealed class TuiApp(UiActions actions)
     {
         actions.LoginClaude();
         _claudeLoginPending = true;
+        _claudeLoginGivesUpAt = DateTime.Now + ClaudeLoginWait;
         _nextClaudeCheck = DateTime.Now.AddSeconds(5);
         Say(T("Conclua o login na janela que abriu.", "Finish signing in in the window that opened."));
     }
