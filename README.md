@@ -271,7 +271,7 @@ dotnet test tests\WfSysMon.Tests
 
 Os testes usam sensores falsos e uma pasta temporária, sem tocar nas suas preferências nem exigir administrador. A leitura de sensores reais continua sendo conferida manualmente.
 
-O GitHub Actions compila e testa a cada push na `dev` e em cada pull request para a `main`. Uma tag `vX.Y.Z` na `main` gera a release: um `.zip` *self-contained* com hash SHA-256 e atestação de origem, que pode ser conferida com:
+O GitHub Actions compila e testa a cada push na `dev` e em cada pull request para a `main`. Uma tag `vX.Y.Z` na `main` gera a release: um `.zip` com hash SHA-256 e atestação de origem. Ele precisa do .NET 10 Runtime e abre pelo `wf-sys-mon.cmd`, que usa o `dotnet.exe` assinado pela Microsoft: um `.exe` próprio, sem assinatura, seria bloqueado pelo Smart App Control. A atestação pode ser conferida com:
 
 ```powershell
 gh attestation verify wf-sys-mon-X.Y.Z-win-x64.zip --repo muryarth/wf-sys-mon-tui
