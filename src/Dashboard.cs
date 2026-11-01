@@ -1,11 +1,15 @@
 using LibreHardwareMonitor.Hardware;
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using static WfSysMon.L;
 
 namespace WfSysMon;
 
+// Conteudo dos paineis. A posicao deles na tela e decidida em TuiApp.
 static class Dashboard
 {
+    const int LabelWidth = 13;
+
     public static void UpdateSensors(Computer computer)
     {
         foreach (var hw in computer.Hardware)
@@ -13,104 +17,151 @@ static class Dashboard
             hw.Update();
             foreach (var sub in hw.SubHardware) sub.Update();
         }
+        SensorDisplay.Update(computer.Hardware);
     }
 
-    const int MinColWidth = 48;   // abaixo disso os paineis ficam apertados
-    const int MaxColWidth = 120;  // acima disso vale mais a pena abrir outra coluna
-
-    // Monta o dashboard ocupando width x height:
-    //  - usa o menor numero de colunas cujo conteudo caiba na altura (respeitando Min/MaxColWidth);
-    //  - distribui os paineis entre as colunas equilibrando as alturas;
-    //  - estica o ultimo painel de cada coluna ate o fim da tela.
-    public static IRenderable Render(Computer computer, CopilotState copilot, AuthState auth, int width, int height)
+    // Temperaturas gerais em destaque no topo da tela, sempre visiveis.
+    public static string HeaderTemps(IEnumerable<IHardware> hardware)
     {
-        var sep = $"  [{Theme.Unit}]|[/]  ";
-        var keys = copilot.NeedsLogin
-            ? $"{Key("L")} [{Theme.Label}]entrar no GitHub[/]"
-            : $"{Key("R")} [{Theme.Label}]atualiza Copilot[/]";
-        var header = new Rule(width >= 60
-                ? $"[bold {Theme.Title}]Workflow System Monitor[/]  [{Theme.Clock}]{DateTime.Now:HH:mm:ss}[/]{sep}{keys}{sep}{Key("Q")}[{Theme.Unit}]/[/]{Key("Esc")} [{Theme.Label}]sai[/]"
-                : $"[bold {Theme.Title}]HW Monitor[/] [{Theme.Clock}]{DateTime.Now:HH:mm:ss}[/]")
-            .LeftJustified()
-            .RuleStyle(Theme.Rule);
+        var parts = new List<string>();
+        var cpu = hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
+        var gpu = hardware.FirstOrDefault(IsGpu);
+        if (cpu is not null) parts.Add($"[bold {Theme.Cpu}]CPU[/] {TempBadge(SensorDisplay.Get(CpuTemp(cpu)))}");
+        if (gpu is not null) parts.Add($"[bold {Theme.Gpu}]GPU[/] {TempBadge(SensorDisplay.Get(GpuTemp(gpu)))}");
+        return string.Join("  ", parts);
+    }
 
-        var bodyHeight = Math.Max(height - 1, 1);
-        var maxCols = Math.Clamp(width / MinColWidth, 1, 4);
-        var minCols = Math.Clamp((int)Math.Ceiling(width / (double)MaxColWidth), 1, maxCols);
+    static bool IsGpu(IHardware h) => h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
 
-        ColumnLayout? best = null;
-        for (var n = minCols; n <= maxCols; n++)
+    static ISensor? CpuTemp(IHardware cpu) =>
+        Sensors(cpu, SensorType.Temperature).FirstOrDefault(s => s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Tdie"));
+
+    static ISensor? GpuTemp(IHardware gpu) =>
+        Sensors(gpu, SensorType.Temperature).FirstOrDefault(s => s.Name.Contains("Core"));
+
+    // Ainda chegando dados: indicador animado, em vez de parecer que algo falta.
+    static string Loading(string text) =>
+        $"[{Theme.Clock}]{Markup.Escape(StartupUi.SpinnerFrame(DateTime.Now).ToString())}[/] [{Theme.Unit}]{Markup.Escape(text)}[/]";
+
+    // Estrutura do painel enquanto os dados nao chegam: rotulos reais e valores apagados, para os
+    // numeros so preencherem o que ja esta na tela.
+    static string Faded => $"[{Theme.BarEmpty}]···[/]";
+
+    static string FadedBar(int colWidth) => $"[{Theme.BarEmpty}]{new string(Unicode ? '\u2500' : '-', ValueBar(colWidth))}[/]";
+
+    static string FadedUsage() =>
+        $"{Faded}   [{Theme.Unit}]{T("Disponível", "Free")}[/] {Faded}   [{Theme.Unit}]Total[/] {Faded}";
+
+    static string Loading() => Loading(T("carregando", "loading"));
+
+    static Panel CpuSkeleton(int colWidth)
+    {
+        var summary = Kv();
+        summary.AddRow(Label(T("Temperatura", "Temperature")), Loading());
+        summary.AddRow(Label(T("Uso total", "Total load")), FadedBar(colWidth));
+
+        var cores = new Table().Expand().Border(TableBorder.None)
+            .AddColumn(new TableColumn(Head(T("Núcleo", "Core"), Theme.Unit)).Width(6).NoWrap())
+            .AddColumn(new TableColumn(Head("Temp", Theme.Unit)).Width(7).NoWrap().RightAligned())
+            .AddColumn(new TableColumn(Head(T("Uso", "Load"), Theme.Unit)).NoWrap())
+            .AddColumn(new TableColumn(Head("Clock", Theme.Unit)).Width(8).NoWrap().RightAligned());
+        var bar = $"[{Theme.BarEmpty}]{new string(Unicode ? '\u2500' : '-', BarWidth(colWidth, 39, int.MaxValue))}[/]";
+
+        // Duas threads por nucleo e a estimativa comum; a tabela real ajusta o numero exato.
+        for (var i = 1; i <= Math.Max(Environment.ProcessorCount / 2, 1); i++)
+            cores.AddRow($"[{Theme.Unit}]{i}[/]", Faded, bar, Faded);
+
+        return Styled(new Rows(summary, new Text(""), cores), "CPU", Theme.Cpu, Icons.Cpu);
+    }
+
+    static Panel MemorySkeleton(int colWidth)
+    {
+        var t = Kv();
+        t.AddRow(Label(T("Uso", "Load")), Loading());
+        t.AddRow(Label(T("Em uso", "Used")), FadedUsage());
+        return Styled(t, T("Memória RAM", "RAM"), Theme.Memory, Icons.Ram);
+    }
+
+    static Panel GpuSkeleton(int colWidth)
+    {
+        var t = Kv();
+        t.AddRow(Label(T("Temperatura", "Temperature")), Loading());
+        t.AddRow(Label(T("Uso", "Load")), FadedBar(colWidth));
+        t.AddRow(Label(T("Ventoinha", "Fan")), $"{Faded}   [{Theme.Unit}]{T("Potência", "Power")}[/] {Faded}");
+        t.AddEmptyRow();
+        t.AddRow(Label("VRAM"), FadedBar(colWidth));
+        t.AddRow(Label(T("Em uso", "Used")), FadedUsage());
+        return Styled(t, "GPU", Theme.Gpu, Icons.Gpu);
+    }
+
+    static Panel StorageSkeleton(int colWidth)
+    {
+        var t = Kv();
+        t.AddRow(Label(T("Disco", "Disk")), Loading());
+        t.AddRow(Label(T("Espaço", "Space")), FadedBar(colWidth));
+        t.AddRow(Label(T("Em uso", "Used")), FadedUsage());
+        return Styled(t, T("Armazenamento", "Storage"), Theme.Storage, Icons.Disk);
+    }
+
+    static Panel BoardSkeleton()
+    {
+        var t = Kv();
+        t.AddRow(Label(T("Temperatura", "Temperature")), Loading());
+        t.AddRow(Label(T("Ventoinha", "Fan")), Faded);
+        return Styled(t, T("Placa-mãe", "Motherboard"), Theme.Mobo, Icons.Board);
+    }
+
+    static Panel CopilotSkeleton(int colWidth)
+    {
+        var t = Kv();
+        t.AddRow(Label(T("Plano", "Plan")), Loading());
+        t.AddRow(Label(T("Consumo", "Usage")), FadedBar(colWidth));
+        t.AddRow(Label(T("Gasto", "Spent")), Faded);
+        t.AddRow(Label(T("Cota plano", "Plan quota")), Faded);
+        t.AddRow(Label("Extra budget"), Faded);
+        t.AddRow(Label(T("Restante", "Left")), Faded);
+        t.AddEmptyRow();
+        t.AddRow(Label("Tokens"), Faded);
+        t.AddRow(Label(T("Atualizado", "Updated")), Faded);
+        return Styled(t, "GitHub Copilot", Theme.Copilot, Icons.Copilot);
+    }
+
+    // Algum painel ainda esta esperando dados: o indicador precisa continuar girando.
+    public static bool IsLoading(IReadOnlyList<IHardware> hardware, CopilotState copilot, ClaudeState claude) =>
+        hardware.Count == 0
+        || (copilot.Snapshot is null && !copilot.NeedsLogin && copilot.Error is null)
+        || !claude.AccountChecked
+        || claude.Month is null;
+
+    public static List<Panel> HardwarePanels(IReadOnlyList<IHardware> hardware, int colWidth)
+    {
+        if (hardware.Count == 0)
         {
-            var layout = Arrange(computer, copilot, auth, width / n, n);
-            if (best is null || layout.Tallest < best.Tallest) best = layout;
-            if (layout.Tallest <= bodyHeight) { best = layout; break; }
+            return [CpuSkeleton(colWidth), MemorySkeleton(colWidth), GpuSkeleton(colWidth), StorageSkeleton(colWidth), BoardSkeleton()];
         }
 
-        // Estica o ultimo painel de cada coluna para alinhar todas ao fim da tela.
-        foreach (var col in best!.Columns)
-        {
-            var used = col.Sum(i => best.Heights[i]);
-            var last = col[^1];
-            if (used < bodyHeight) best.Panels[last].Height = best.Heights[last] + bodyHeight - used;
-        }
+        var cpu = hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
 
-        IRenderable body = best.Columns.Count == 1
-            ? new Rows(best.Columns[0].Select(i => best.Panels[i]))
-            : EqualColumns(best.ColWidth, best.Columns.Select(c => (IRenderable)new Rows(c.Select(i => best.Panels[i]))).ToArray());
-
-        return new Rows(header, body);
-    }
-
-    sealed record ColumnLayout(int ColWidth, List<Panel> Panels, List<int> Heights, List<List<int>> Columns)
-    {
-        public int Tallest => Columns.Max(c => c.Sum(i => Heights[i]));
-    }
-
-    static ColumnLayout Arrange(Computer computer, CopilotState copilot, AuthState auth, int colWidth, int columns)
-    {
-        var panels = BuildPanels(computer, copilot, auth, colWidth);
-        var heights = panels.Select(p => Screen.RenderLines(p, colWidth).Count).ToList();
-        columns = Math.Min(columns, panels.Count);
-
-        // Maior painel primeiro, sempre na coluna mais baixa (LPT); depois mantem a ordem original
-        // dentro de cada coluna e ordena as colunas pelo primeiro painel (CPU fica a esquerda).
-        var cols = Enumerable.Range(0, columns).Select(_ => new List<int>()).ToList();
-        foreach (var i in Enumerable.Range(0, panels.Count).OrderByDescending(i => heights[i]).ThenBy(i => i))
-            cols.MinBy(c => c.Sum(j => heights[j]))!.Add(i);
-        foreach (var c in cols) c.Sort();
-        cols = cols.Where(c => c.Count > 0).OrderBy(c => c[0]).ToList();
-
-        return new ColumnLayout(colWidth, panels, heights, cols);
-    }
-
-    static List<Panel> BuildPanels(Computer computer, CopilotState copilot, AuthState auth, int colWidth)
-    {
-        var cpu = computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
-        var mem = computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Memory);
-        var gpus = computer.Hardware.Where(h => h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel);
-        var mobo = computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Motherboard);
-        var disks = computer.Hardware.Where(h => h.HardwareType == HardwareType.Storage).ToList();
+        // A biblioteca separa a memoria em "Total Memory" e "Virtual Memory"; o painel e da RAM fisica.
+        var memories = hardware.Where(h => h.HardwareType == HardwareType.Memory).ToList();
+        var mem = memories.FirstOrDefault(h => h.Name.Contains("Total"))
+                  ?? memories.FirstOrDefault(h => !h.Name.Contains("Virtual"));
+        var mobo = hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Motherboard);
+        var disks = hardware.Where(h => h.HardwareType == HardwareType.Storage).ToList();
 
         var panels = new List<Panel>
         {
-            cpu is null ? Unavailable("CPU", Theme.Cpu) : CpuPanel(cpu, colWidth),
-            mem is null ? Unavailable("Memoria", Theme.Memory) : MemoryPanel(mem, colWidth),
+            cpu is null ? Missing("CPU", Theme.Cpu, Icons.Cpu) : CpuPanel(cpu, colWidth),
+            mem is null ? Missing(T("Memória RAM", "RAM"), Theme.Memory, Icons.Ram) : MemoryPanel(mem, colWidth),
         };
-        panels.AddRange(gpus.Select(g => GpuPanel(g, colWidth)));
-        panels.Add(mobo is null ? Unavailable("Placa-mae", Theme.Mobo) : MotherboardPanel(mobo));
-        panels.Add(disks.Count == 0 ? Unavailable("Storage", Theme.Storage) : StoragePanel(disks, colWidth));
-        panels.Add(CopilotPanel(copilot, auth, colWidth));
+        panels.AddRange(hardware.Where(IsGpu).Select(g => GpuPanel(g, colWidth)));
+        panels.Add(disks.Count == 0 ? Missing(T("Armazenamento", "Storage"), Theme.Storage, Icons.Disk) : StoragePanel(disks, colWidth));
+        panels.Add(mobo is null ? Missing(T("Placa-mãe", "Motherboard"), Theme.Mobo, Icons.Board) : MotherboardPanel(mobo));
         return panels;
     }
 
-    static Grid EqualColumns(int colWidth, params IRenderable[] cells)
-    {
-        var grid = new Grid();
-        foreach (var _ in cells)
-            grid.AddColumn(new GridColumn().Width(colWidth).Padding(0, 0, 0, 0));
-        grid.AddRow(cells);
-        return grid;
-    }
+    public static List<Panel> AiPanels(CopilotState copilot, ClaudeState claude, AuthState auth, int colWidth) =>
+        [CopilotPanel(copilot, auth, colWidth), ClaudePanel(claude, colWidth)];
 
     // ---------------------------------------------------------------- CPU
 
@@ -120,23 +171,27 @@ static class Dashboard
         var loads = Sensors(cpu, SensorType.Load);
         var clocks = Sensors(cpu, SensorType.Clock);
         var power = Sensors(cpu, SensorType.Power).FirstOrDefault(s => s.Name.Contains("Package"));
-
-        var pkgTemp = temps.FirstOrDefault(s => s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Tdie"));
         var totalLoad = loads.FirstOrDefault(s => s.Name.Contains("Total"));
 
-        var summary = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v");
-        summary.AddRow(Label("Pacote"), TempMarkup(pkgTemp?.Value));
-        summary.AddRow(Label("Uso total"), LoadBar(totalLoad?.Value, BarWidth(colWidth, 22, 80)));
-        if (power?.Value is { } w) summary.AddRow(Label("Potencia"), Value($"{w:F1}", "W"));
+        var summary = Kv();
+        var powerText = SensorDisplay.Get(power) is { } w ? $"   [{Theme.Label}]{T("Potência", "Power")}[/] {Value($"{w:F1}", "W")}" : "";
+        summary.AddRow(Label(T("Temperatura", "Temperature")), MainTemp(CpuTemp(cpu)) + powerText);
+        summary.AddRow(Label(T("Uso total", "Total load")), SensorBar(totalLoad, ValueBar(colWidth)));
 
+        // Min/Max por nucleo so saem em colunas muito estreitas, onde a barra nao caberia.
+        var showRange = colWidth >= 60;
         var cores = new Table()
             .Expand()
-            .Border(TableBorder.Rounded)
-            .BorderStyle(Style.Parse(Theme.TableBorder))
-            .AddColumn(new TableColumn(Head("Nucleo", Theme.Cpu)).Width(6).NoWrap())
-            .AddColumn(new TableColumn(Head("Temp", Theme.Cpu)).Width(6).NoWrap().RightAligned())
-            .AddColumn(new TableColumn(Head("Uso", Theme.Cpu)).NoWrap())
-            .AddColumn(new TableColumn(Head("Clock", Theme.Cpu)).Width(8).NoWrap().RightAligned());
+            .Border(TableBorder.None)
+            .AddColumn(new TableColumn(Head(T("Núcleo", "Core"), Theme.Unit)).Width(6).NoWrap())
+            .AddColumn(new TableColumn(Head("Temp", Theme.Unit)).Width(7).NoWrap().RightAligned());
+        if (showRange)
+        {
+            cores.AddColumn(new TableColumn(Head("Min", Theme.Unit)).Width(5).NoWrap().RightAligned());
+            cores.AddColumn(new TableColumn(Head("Max", Theme.Unit)).Width(5).NoWrap().RightAligned());
+        }
+        cores.AddColumn(new TableColumn(Head(T("Uso", "Load"), Theme.Unit)).NoWrap())
+            .AddColumn(new TableColumn(Head("Clock", Theme.Unit)).Width(8).NoWrap().RightAligned());
 
         var coreTemps = temps
             .Where(s => s.Name.StartsWith("CPU Core #") && !s.Name.Contains("Distance"))
@@ -149,14 +204,18 @@ static class Dashboard
                     ?? loads.FirstOrDefault(s => s.Name.StartsWith($"CPU Core #{idx} "));
             var clock = clocks.FirstOrDefault(s => s.Name == $"CPU Core #{idx}");
 
-            cores.AddRow(
-                $"[{Theme.Cpu}]#{idx}[/]",
-                TempMarkup(t.Value),
-                LoadBar(load?.Value, BarWidth(colWidth, 42, 70)),
-                clock?.Value is { } c ? Value($"{c:F0}", "MHz", Theme.Clock) : Dash);
+            var row = new List<string> { $"[{Theme.Unit}]{idx}[/]", TempMarkup(SensorDisplay.Get(t)) };
+            if (showRange)
+            {
+                row.Add(TempNumber(SensorDisplay.Min(t)));
+                row.Add(TempNumber(t.Max));
+            }
+            row.Add(SensorBar(load, BarWidth(colWidth, showRange ? 53 : 39, int.MaxValue)));
+            row.Add(SensorDisplay.Get(clock) is { } c ? Value($"{c:F0}", "MHz", Theme.Clock) : Dash);
+            cores.AddRow(row.ToArray());
         }
 
-        return Styled(new Rows(summary, cores), "CPU", Theme.Cpu, cpu.Name);
+        return Styled(new Rows(summary, new Text(""), cores), "CPU", Theme.Cpu, Icons.Cpu, cpu.Name);
     }
 
     // ------------------------------------------------------------- Memoria
@@ -165,36 +224,74 @@ static class Dashboard
     {
         var used = Sensors(mem, SensorType.Data).FirstOrDefault(s => s.Name == "Memory Used")?.Value;
         var avail = Sensors(mem, SensorType.Data).FirstOrDefault(s => s.Name == "Memory Available")?.Value;
-        var pct = Sensors(mem, SensorType.Load).FirstOrDefault(s => s.Name == "Memory")?.Value;
+        var pct = Sensors(mem, SensorType.Load).FirstOrDefault(s => s.Name == "Memory");
 
-        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v");
-        t.AddRow(Label("Em uso"), used is { } u ? Value($"{u:F1}", "GB") : Dash);
-        t.AddRow(Label("Disponivel"), avail is { } a ? Value($"{a:F1}", "GB", Theme.Good) : Dash);
-        t.AddRow("", LoadBar(pct, BarWidth(colWidth, 24, 80)));
+        var t = Kv();
+        t.AddRow(Label(T("Uso", "Load")), SensorBar(pct, ValueBar(colWidth)));
+        AddUsage(t, used, avail, used + avail, SensorDisplay.Get(pct), colWidth);
 
-        return Styled(t, "Memoria RAM", Theme.Memory);
+        return Styled(t, T("Memória RAM", "RAM"), Theme.Memory, Icons.Ram);
     }
+
+    // Em uso / Disponivel / Total, sempre nesta ordem e nas mesmas cores: o uso segue o alerta da barra.
+    static void AddUsage(Table t, double? used, double? available, double? total, float? pct, int colWidth)
+    {
+        var color = pct is { } p ? LoadColor(p) : Theme.Value;
+        var usedText = used is { } u ? $"[bold {color}]{Gb(u)}[/]" : Dash;
+        var freeText = available is { } a ? $"[bold {Theme.Good}]{Gb(a)}[/]" : Dash;
+        var totalText = total is { } tt ? $"[bold {Theme.Value}]{Gb(tt)}[/]" : Dash;
+
+        if (colWidth >= 62)
+        {
+            t.AddRow(Label(T("Em uso", "Used")), $"{usedText}   [{Theme.Label}]{T("Disponível", "Free")}[/] {freeText}   [{Theme.Label}]Total[/] {totalText}");
+        }
+        else
+        {
+            t.AddRow(Label(T("Em uso", "Used")), usedText);
+            t.AddRow(Label(T("Disponível", "Free")), freeText);
+            t.AddRow(Label("Total"), totalText);
+        }
+    }
+
+    static string Gb(double v) => v >= 100 ? $"{v:F0} GB" : $"{v:F1} GB";
 
     // ----------------------------------------------------------------- GPU
 
     static Panel GpuPanel(IHardware gpu, int colWidth)
     {
-        var temp = Sensors(gpu, SensorType.Temperature).FirstOrDefault(s => s.Name.Contains("Core"))?.Value;
-        var load = Sensors(gpu, SensorType.Load).FirstOrDefault(s => s.Name.Contains("Core"))?.Value;
-        var fan = Sensors(gpu, SensorType.Fan).FirstOrDefault()?.Value;
-        var power = Sensors(gpu, SensorType.Power).FirstOrDefault()?.Value;
-        var memUsed = Sensors(gpu, SensorType.SmallData).FirstOrDefault(s => s.Name.Contains("Memory Used"))?.Value;
-        var memTotal = Sensors(gpu, SensorType.SmallData).FirstOrDefault(s => s.Name.Contains("Memory Total"))?.Value;
+        var load = Sensors(gpu, SensorType.Load).FirstOrDefault(s => s.Name.Contains("Core"));
+        var fan = SensorDisplay.Get(Sensors(gpu, SensorType.Fan).FirstOrDefault());
+        var power = SensorDisplay.Get(Sensors(gpu, SensorType.Power).FirstOrDefault());
 
-        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v");
-        t.AddRow(Label("Temperatura"), TempMarkup(temp));
-        t.AddRow(Label("Uso"), LoadBar(load, BarWidth(colWidth, 25, 80)));
-        if (memUsed is { } mu && memTotal is { } mt) t.AddRow(Label("VRAM"), $"{Value($"{mu / 1024:F1}", "")}[{Theme.Unit}]/[/] {Value($"{mt / 1024:F1}", "GB")}");
-        if (fan is { } f) t.AddRow(Label("Fan"), Value($"{f:F0}", "RPM", Theme.Fan));
-        if (power is { } p) t.AddRow(Label("Potencia"), Value($"{p:F0}", "W"));
+        var t = Kv();
+        t.AddRow(Label(T("Temperatura", "Temperature")), MainTemp(GpuTemp(gpu)));
+        t.AddRow(Label(T("Uso", "Load")), SensorBar(load, ValueBar(colWidth)));
+        if (fan is { } f && power is { } both)
+            t.AddRow(Label(T("Ventoinha", "Fan")), $"{Value($"{f:F0}", "RPM", Theme.Fan)}   [{Theme.Label}]{T("Potência", "Power")}[/] {Value($"{both:F0}", "W")}");
+        else if (fan is { } onlyFan) t.AddRow(Label(T("Ventoinha", "Fan")), Value($"{onlyFan:F0}", "RPM", Theme.Fan));
+        else if (power is { } onlyPower) t.AddRow(Label(T("Potência", "Power")), Value($"{onlyPower:F0}", "W"));
 
-        return Styled(t, "GPU", Theme.Gpu, gpu.Name);
+        // A memoria dedicada real: "D3D Dedicated Memory Used" nao e o total em uso da placa.
+        var memory = Sensors(gpu, SensorType.SmallData).ToList();
+        var used = VramSensor(memory, "Used")?.Value;
+        var free = VramSensor(memory, "Free")?.Value;
+        var total = VramSensor(memory, "Total")?.Value ?? used + free;
+        free ??= total - used;
+
+        if (used is { } u && total is { } tt && tt > 0)
+        {
+            var pct = u / tt * 100;
+            t.AddEmptyRow();
+            t.AddRow(Label("VRAM"), LoadBar(pct, ValueBar(colWidth)));
+            AddUsage(t, u / 1024, free / 1024, tt / 1024, pct, colWidth);
+        }
+
+        return Styled(t, "GPU", Theme.Gpu, Icons.Gpu, gpu.Name);
     }
+
+    static ISensor? VramSensor(List<ISensor> memory, string kind) =>
+        memory.FirstOrDefault(s => s.Name == $"GPU Memory {kind}")
+        ?? memory.FirstOrDefault(s => s.Name.Contains($"Memory {kind}") && !s.Name.StartsWith("D3D"));
 
     // ----------------------------------------------------------- Placa-mae
 
@@ -203,26 +300,56 @@ static class Dashboard
         var temps = Sensors(mobo, SensorType.Temperature).Where(s => s.Value > 0).Take(4).ToList();
         var fans = Sensors(mobo, SensorType.Fan).Where(s => s.Value > 0).ToList();
 
-        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v");
-        foreach (var s in temps) t.AddRow(Label(s.Name), TempMarkup(s.Value));
-        foreach (var s in fans) t.AddRow(Label(s.Name), Value($"{s.Value:F0}", "RPM", Theme.Fan));
-        if (t.Rows.Count == 0) t.AddRow($"[{Theme.Unit}]sem sensores expostos[/]", "");
+        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn(new TableColumn("k").Width(18).NoWrap()).AddColumn("v");
+        foreach (var s in temps) t.AddRow(Label(s.Name), $"{TempMarkup(SensorDisplay.Get(s))}  {TempRange(s)}");
+        foreach (var s in fans) t.AddRow(Label(s.Name), Value($"{SensorDisplay.Get(s):F0}", "RPM", Theme.Fan));
+        if (t.Rows.Count == 0) t.AddRow($"[{Theme.Unit}]{T("sem sensores", "no sensors")}[/]", "");
 
-        return Styled(t, "Placa-mae", Theme.Mobo, mobo.Name);
+        return Styled(t, T("Placa-mãe", "Motherboard"), Theme.Mobo, Icons.Board, mobo.Name);
     }
 
     // ------------------------------------------------------------- Storage
 
     static Panel StoragePanel(List<IHardware> disks, int colWidth)
     {
-        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v").AddColumn("u");
+        var t = Kv();
+        var first = true;
         foreach (var d in disks)
         {
-            var temp = Sensors(d, SensorType.Temperature).FirstOrDefault()?.Value;
-            var used = Sensors(d, SensorType.Load).FirstOrDefault(s => s.Name == "Used Space")?.Value;
-            t.AddRow(Label(d.Name), TempMarkup(temp), LoadBar(used, BarWidth(colWidth, 45, 40)));
+            if (!first) t.AddEmptyRow();
+            first = false;
+
+            var temp = Sensors(d, SensorType.Temperature).FirstOrDefault();
+            var usedSensor = Sensors(d, SensorType.Load).FirstOrDefault(s => s.Name == "Used Space");
+            var space = DiskVolumes.Find(d.Name);
+
+            var diskTemp = $"{TempMarkup(SensorDisplay.Get(temp))}  {TempRange(temp)}";
+            if (colWidth >= 76)
+            {
+                t.AddRow(Label(T("Disco", "Disk")), $"[bold {Theme.Value}]{Markup.Escape(d.Name)}[/]   {diskTemp}");
+            }
+            else
+            {
+                t.AddRow(Label(T("Disco", "Disk")), $"[bold {Theme.Value}]{Markup.Escape(d.Name)}[/]");
+                t.AddRow(Label("Temp"), diskTemp);
+            }
+
+            if (space is not null)
+            {
+                var pct = (float)(space.UsedGb / space.TotalGb * 100);
+                t.AddRow(Label(T("Espaço", "Space")), LoadBar(pct, ValueBar(colWidth)));
+                AddUsage(t, space.UsedGb, space.FreeGb, space.TotalGb, pct, colWidth);
+            }
+            else if (usedSensor is not null)
+            {
+                t.AddRow(Label(T("Espaço", "Space")), SensorBar(usedSensor, ValueBar(colWidth)));
+            }
+            else
+            {
+                t.AddRow(Label(T("Espaço", "Space")), $"[{Theme.Unit}]{T("sem volume", "no volume")}[/]");
+            }
         }
-        return Styled(t, "Storage", Theme.Storage);
+        return Styled(t, T("Armazenamento", "Storage"), Theme.Storage, Icons.Disk);
     }
 
     // ------------------------------------------------------------- Copilot
@@ -234,119 +361,123 @@ static class Dashboard
 
         var authBusy = auth.Step is AuthStep.InstallingGh or AuthStep.Starting or AuthStep.WaitingUser;
         if (state.NeedsLogin || authBusy)
-            return Styled(LoginContent(state, auth), title, Theme.Copilot);
+            return Styled(new Markup(NeedsAccount(T("Não conectado", "Not connected"))), title, Theme.Copilot, Icons.Copilot);
 
         if (snap is null)
         {
-            var msg = state.Error is { } err
-                ? $"[bold {Theme.Bad}]Erro:[/] {Markup.Escape(err)}"
-                : $"[{Theme.Warn}]consultando plano...[/]";
-            return Styled(new Markup(msg), title, Theme.Copilot);
+            return state.Error is { } err
+                ? Styled(new Markup($"[bold {Theme.Bad}]{T("Erro", "Error")}:[/] {Markup.Escape(err)}"), title, Theme.Copilot, Icons.Copilot)
+                : CopilotSkeleton(colWidth);
         }
 
-        var unit = snap.TokenBasedBilling ? "creditos" : "req. premium";
         var usdPerUnit = snap.TokenBasedBilling ? CopilotUsage.UsdPerCredit : CopilotUsage.UsdPerPremiumRequest;
+        var total = snap.Entitlement + snap.ExtraBudget;  // cota do plano + extra budget
+        var remaining = Math.Max(0, total - snap.Used);   // a API devolve saldo negativo quando usa o extra
+        var usedPct = total > 0 ? (float)Math.Clamp(snap.Used / total * 100, 0, 100) : 0f;
+        var band = BudgetColor(usedPct);
 
-        var t = new Table().Border(TableBorder.None).HideHeaders().AddColumn("k").AddColumn("v");
-        t.AddRow(Label("Plano"), $"[bold {Theme.Copilot}]{Markup.Escape(PlanName(snap.Plan))}[/] [{Theme.Unit}]({Markup.Escape(snap.Plan)})[/]");
+        var t = Kv();
+        t.AddRow(Label(T("Plano", "Plan")), PlanRow(PlanName(snap.Plan), Theme.Copilot));
 
         if (snap.Unlimited)
         {
-            t.AddRow(Label("Uso"), $"[bold {Theme.Good}]ilimitado[/]");
+            t.AddRow(Label(T("Uso", "Usage")), $"[bold {Theme.Good}]{T("ilimitado", "unlimited")}[/]");
         }
         else
         {
-            var usedPct = (float)Math.Clamp(100 - snap.PercentRemaining, 0, 100);
-            t.AddRow(Label("Consumo"), LoadBar(usedPct, BarWidth(colWidth, 24, 80)));
-            t.AddRow(Label("Gasto"), $"[bold {Theme.Spent}]{Int(snap.Used)}[/] [{Theme.Unit}]/[/] [bold]{Int(snap.Entitlement)}[/] [{Theme.Unit}]{unit}[/] [{Theme.Money}](US$ {snap.Used * usdPerUnit:F2})[/]");
-            t.AddRow(Label("Restante"), $"[bold {Theme.Good}]{Int(snap.Remaining)}[/] [{Theme.Unit}]{unit}[/] [{Theme.Money}](US$ {snap.Remaining * usdPerUnit:F2})[/]");
+            t.AddRow(Label(T("Consumo", "Usage")), LoadBar(usedPct, ValueBar(colWidth)));
+            // O valor em AIC fica na ponta direita de cada categoria; cobranca legada nao usa creditos.
+            string Row(double used, double limit, bool strong, bool showLimit = true)
+            {
+                var money = $"[{(strong ? $"bold {band}" : band)}]US$ {used * usdPerUnit:F2}[/]";
+                if (showLimit) money += $" [{Theme.Unit}]/ {limit * usdPerUnit:F2}[/]";
+                if (!snap.TokenBasedBilling) return money;
+
+                var credits = showLimit ? $"{Credits(used)} / {Credits(limit)} AIC" : $"{Credits(used)} AIC";
+                return WithRightBadge(money, $"[bold black on {band}] {credits} [/]", colWidth);
+            }
+
+            var extraUsed = Math.Max(0, snap.Used - snap.Entitlement);
+            var planUsed = snap.Used - extraUsed;
+            t.AddRow(Label(T("Gasto", "Spent")), Row(snap.Used, total, strong: true));
+            t.AddRow(Label(T("Cota plano", "Plan quota")), Row(planUsed, snap.Entitlement, strong: false));
+            if (snap.ExtraBudget > 0)
+                t.AddRow(Label("Extra budget"), Row(extraUsed, snap.ExtraBudget, strong: false));
+            else if (extraUsed > 0)
+                t.AddRow(Label("Extra budget"), Row(extraUsed, 0, strong: false, showLimit: false));
+            t.AddRow(Label(T("Restante", "Left")), $"[bold {band}]US$ {remaining * usdPerUnit:F2}[/]");
         }
 
+        // Ciclo que ja fechou: em cor neutra, porque nao e um alerta do momento.
+        if (state.LastCycle is { } last)
+        {
+            var lastTotal = last.Entitlement + last.ExtraBudget;
+            var lastUnit = last.TokenBasedBilling ? CopilotUsage.UsdPerCredit : CopilotUsage.UsdPerPremiumRequest;
+            var lastMoney = $"[{Theme.Value}]US$ {last.Used * lastUnit:F2}[/] [{Theme.Unit}]/ {lastTotal * lastUnit:F2}[/]";
+            t.AddRow(Label(T("Último ciclo", "Last cycle")), last.TokenBasedBilling
+                ? WithRightBadge(lastMoney, $"[bold black on {Theme.KeyBg}] {Credits(last.Used)} / {Credits(lastTotal)} AIC [/]", colWidth)
+                : lastMoney);
+        }
+
+        t.AddEmptyRow();
+        if (state.Local is { Total: > 0 } local)
+        {
+            var share = snap.Used > 0 ? Math.Min(100, local.Credits / snap.Used * 100) : 0;
+            t.AddRow(Label("Tokens"), $"[bold]{Tokens(local.Total)}[/]   [{Theme.Unit}]CLI, {share:F0}% {T("do gasto", "of spend")}[/]");
+            t.AddRow("", TokenBreakdown(local.Input, local.Output, local.CacheRead + local.CacheWrite));
+        }
+        else
+        {
+            t.AddRow(Label("Tokens"), Unavailable());
+        }
+
+        var status = state.Loading ? $"[{Theme.Warn}]{T("atualizando...", "updating...")}[/]" : $"[{Theme.Clock}]{snap.FetchedAt:HH:mm:ss}[/]";
+        if (state.Error is { } e) status += $" [{Theme.Bad}]({Markup.Escape(e)})[/]";
         if (snap.ResetDate is { } reset)
         {
             var days = Math.Max(0, (int)Math.Ceiling((reset - DateTime.UtcNow).TotalDays));
             var daysColor = days <= 3 ? Theme.Warn : Theme.Unit;
-            t.AddRow(Label("Renova em"), $"[bold]{reset:dd/MM/yyyy}[/] [{daysColor}]({days} dias)[/]");
+            status += $"   [{Theme.Label}]{T("Renova", "Renews")}[/] [bold]{Day(reset)}[/] [{daysColor}]{T("em", "in")} {days}d[/]";
         }
+        t.AddRow(Label(T("Atualizado", "Updated")), status);
 
-        var status = state.Loading ? $"[{Theme.Warn}]atualizando...[/]" : $"[{Theme.Clock}]{snap.FetchedAt:HH:mm:ss}[/]";
-        if (!state.Loading && state.NextRefresh is { } next)
-            status += $" [{Theme.Unit}](proxima em {Math.Max(0, (int)(next - DateTime.Now).TotalSeconds)}s)[/]";
-        if (state.Error is { } e) status += $" [{Theme.Bad}]({Markup.Escape(e)})[/]";
-        t.AddRow(Label("Atualizado"), status);
-
-        var content = new List<IRenderable> { t };
-
-        if (snap.TokenBasedBilling && !snap.Unlimited)
-        {
-            var tokens = new Table()
-                .Expand()
-                .Border(TableBorder.Rounded)
-                .BorderStyle(Style.Parse(Theme.TableBorder))
-                .Title($"[{Theme.Label}]equivalente em tokens ([/][{Theme.Input}]entrada[/] [{Theme.Unit}]/[/] [{Theme.Output}]saida[/][{Theme.Label}])[/]")
-                .AddColumn(new TableColumn(Head("Modelo", Theme.Copilot)).NoWrap());
-
-            // Em colunas estreitas mostra so o restante para nao quebrar linhas.
-            var showSpent = colWidth >= 64;
-            if (showSpent) tokens.AddColumn(new TableColumn(Head("Gasto", Theme.Spent)).NoWrap().RightAligned());
-            tokens.AddColumn(new TableColumn(Head("Restante", Theme.Good)).NoWrap().RightAligned());
-
-            var models = state.Models;
-            tokens.Caption($"[{Theme.Unit}]precos: {Markup.Escape(models.Source)}"
-                + (models.UpdatedAt > DateTime.MinValue ? $" ({models.UpdatedAt:dd/MM HH:mm})" : "") + "[/]");
-
-            foreach (var m in models.Models)
-            {
-                var name = $"[{Theme.Copilot}]{Markup.Escape(m.Name)}[/]";
-                if (showSpent) tokens.AddRow(name, TokenPair(snap.Used, m), TokenPair(snap.Remaining, m));
-                else tokens.AddRow(name, TokenPair(snap.Remaining, m));
-            }
-
-            content.Add(tokens);
-        }
-        else if (!snap.TokenBasedBilling)
-        {
-            content.Add(new Markup($"[{Theme.Unit}]cobranca legada por requisicao - sem conversao direta para tokens[/]"));
-        }
-
-        return Styled(new Rows(content), title, Theme.Copilot);
+        return Styled(t, title, Theme.Copilot, Icons.Copilot);
     }
 
-    // Jornada de primeiro uso: conectar a conta do GitHub sem sair da TUI.
-    static IRenderable LoginContent(CopilotState state, AuthState auth)
+    // Passos do login no GitHub, mostrados na tela de contas.
+    public static List<string> LoginSteps(CopilotState state, AuthState auth)
     {
-        var lines = new List<IRenderable>();
         switch (auth.Step)
         {
             case AuthStep.InstallingGh:
             case AuthStep.Starting:
-                lines.Add(new Markup($"[{Theme.Warn}]{Markup.Escape(auth.Message ?? "aguarde...")}[/]"));
-                break;
+                return [$"[{Theme.Warn}]{Markup.Escape(auth.Message ?? T("aguarde...", "please wait..."))}[/]"];
 
             case AuthStep.WaitingUser:
-                lines.Add(new Markup($"[bold]1.[/] [{Theme.Label}]Acesse[/] [bold {Theme.Input} underline]{GitHubAuth.DeviceUrl}[/] [{Theme.Unit}](aberto no navegador)[/]"));
-                lines.Add(new Markup($"[bold]2.[/] [{Theme.Label}]Digite o codigo[/] [{Theme.Unit}](ja copiado)[/]:"));
-                lines.Add(new Panel(new Markup($"[bold {Theme.Spent}]{auth.Code}[/]"))
-                    .Border(BoxBorder.Double).BorderStyle(Style.Parse(Theme.Spent)).Padding(3, 0, 3, 0));
-                lines.Add(new Markup($"[bold]3.[/] [{Theme.Label}]Autorize o acesso e volte para ca[/]"));
-                lines.Add(new Markup($"[{Theme.Warn}]aguardando autorizacao...[/]"));
-                break;
+                return
+                [
+                    $"[bold]1.[/] [{Theme.Label}]{T("Acesse", "Open")}[/] [bold {Theme.Input} underline]{GitHubAuth.DeviceUrl}[/] [{Theme.Unit}]({T("aberto no navegador", "opened in the browser")})[/]",
+                    $"[bold]2.[/] [{Theme.Label}]{T("Digite o código", "Enter the code")}:[/] [bold black on {Theme.Spent}] {auth.Code} [/]",
+                    $"[bold]3.[/] [{Theme.Label}]{T("Autorize o acesso e volte para cá", "Authorize access and come back here")}[/]",
+                    $"[{Theme.Warn}]{T("aguardando autorização...", "waiting for authorization...")}[/]",
+                ];
 
             case AuthStep.Done:
-                lines.Add(new Markup($"[bold {Theme.Good}]conectado![/] [{Theme.Warn}]carregando dados do Copilot...[/]"));
-                break;
+                return [$"[bold {Theme.Good}]{T("conectado!", "connected!")}[/] [{Theme.Warn}]{T("carregando dados do Copilot...", "loading Copilot data...")}[/]"];
+
+            case AuthStep.Failed:
+                return [$"[bold {Theme.Bad}]{T("Falha no login", "Sign-in failed")}:[/] {Markup.Escape(auth.Message ?? "")}"];
 
             default:
-                if (auth.Step == AuthStep.Failed)
-                    lines.Add(new Markup($"[bold {Theme.Bad}]Falha no login:[/] {Markup.Escape(auth.Message ?? "")}"));
-                else if (state.Error is { } err)
-                    lines.Add(new Markup($"[{Theme.Warn}]{Markup.Escape(err)}[/]"));
-                lines.Add(new Markup($"[{Theme.Label}]Conecte sua conta do GitHub para ver o plano, os creditos e o uso do Copilot.[/]"));
-                lines.Add(new Markup($"Pressione {Key("L")} [bold]para entrar[/] [{Theme.Unit}](instala o GitHub CLI se necessario)[/]"));
-                break;
+                // "Nao conectado" ja aparece na linha da conta; aqui so o que for novidade, como sessao expirada.
+                return state.NeedsLogin && state.Error is { } err && err != CopilotUsage.NotConnectedMessage
+                    ? [$"[{Theme.Warn}]{Markup.Escape(err)}[/]"]
+                    : [];
         }
-        return new Rows(lines);
     }
+
+    static string NeedsAccount(string text) =>
+        $"[{Theme.Unit}]{Markup.Escape(text)}[/]  {Key("A")}";
 
     static string PlanName(string plan) => plan.ToLowerInvariant() switch
     {
@@ -359,11 +490,129 @@ static class Dashboard
         _ => plan,
     };
 
-    // creditos -> US$ -> tokens, usando o preco por 1M tokens do modelo
-    static string TokenPair(double credits, ModelPrice m)
+    // -------------------------------------------------------------- Claude
+
+    // Cada bloco indica a origem: a cota vem da conta (via Claude Code); os tokens, dos logs deste PC.
+    internal static Panel ClaudePanel(ClaudeState state, int colWidth)
     {
-        var usd = credits * CopilotUsage.UsdPerCredit;
-        return $"[{Theme.Input}]{Tokens(usd / m.InputPerM * 1_000_000)}[/] [{Theme.Unit}]/[/] [{Theme.Output}]{Tokens(usd / m.OutputPerM * 1_000_000)}[/]";
+        if (state.LoggedIn == false)
+            return Styled(new Markup(NeedsAccount(T("Não conectado", "Not connected"))), "Claude", Theme.Claude, Icons.Claude);
+
+        var t = Kv();
+        t.AddRow(Label(T("Plano", "Plan")), state.Plan is { } plan ? PlanRow(plan, Theme.Claude)
+            : state.AccountChecked ? Unavailable()
+            : Loading(T("carregando", "loading")));
+
+        if (state.FiveHour is null && state.SevenDay is null && state.Month is null)
+        {
+            t.AddRow(Label(T("Cota 5h", "5h quota")), FadedBar(colWidth));
+            t.AddRow(Label(T("Cota 7 dias", "7-day quota")), FadedBar(colWidth));
+        }
+        else if (state.FiveHour is null && state.SevenDay is null)
+        {
+            t.AddRow(Label(T("Cota", "Quota")), state.HasQuotaFiles
+                ? $"[{Theme.Warn}]{T("sem dado recente", "no recent data")}[/]"
+                : $"[{Theme.Warn}]{T("sem dados", "no data")}[/]  {Key("A")}");
+        }
+        else
+        {
+            AddWindow(t, T("Cota 5h", "5h quota"), state.FiveHour, colWidth, state.Month is null);
+            AddWindow(t, T("Cota 7 dias", "7-day quota"), state.SevenDay, colWidth, state.Month is null);
+            if (state.QuotaCapturedAt is { } at)
+            {
+                var age = DateTime.Now - at;
+                var color = age > TimeSpan.FromMinutes(10) ? Theme.Warn : Theme.Clock;
+                t.AddRow(Label(T("Atualizado", "Updated")), $"[{color}]{T($"há {Elapsed(age)}", $"{Elapsed(age)} ago")}[/]"
+                    + (state.CheckedAt is { } read ? $"   [{Theme.Unit}]{T("lido", "read")} {read:HH:mm:ss}[/]" : ""));
+            }
+        }
+
+        t.AddEmptyRow();
+        if (state.LogsError is { } error)
+        {
+            t.AddRow(Label(T("Este mês", "This month")), $"[{Theme.Bad}]{Markup.Escape(error)}[/]");
+        }
+        else if (state.Month is not { } month)
+        {
+            t.AddRow(Label(T("Este mês", "This month")), Loading(T("carregando", "loading")));
+        }
+        else
+        {
+            // Sem preco para algum modelo o total ficaria menor que o real: o "?" deixa isso visivel.
+            var unpriced = state.MonthByModel.Any(m => ClaudePricing.Find(m.Model) is null);
+            var usdText = !unpriced ? $"US$ {month.Usd:F2}" : month.Usd > 0 ? $"US$ {month.Usd:F2}+{Unavailable()}" : $"US$ {Unavailable()}";
+            t.AddRow(Label(T("Este mês", "This month")), $"[bold]{Tokens(month.Total)}[/]   [bold {Theme.Spent}]~{usdText}[/]   [{Theme.Unit}]{T("neste PC", "this PC")}[/]");
+            t.AddRow("", TokenBreakdown(month.Input, month.Output, month.CacheRead + month.CacheWrite));
+        }
+
+        return Styled(t, "Claude", Theme.Claude, Icons.Claude);
+    }
+
+    // Empurra o selo ate a ponta direita da coluna de valor, alinhado com o percentual das barras.
+    static string WithRightBadge(string text, string badge, int colWidth)
+    {
+        var free = colWidth - 22 - Screen.CellWidth(Markup.Remove(text)) - Screen.CellWidth(Markup.Remove(badge));
+        return text + new string(' ', Math.Max(free, 1)) + badge;
+    }
+
+    static string Credits(double v) =>
+        Math.Floor(v).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(',', T(".", ",")[0]);
+
+    // Nome do plano e preco mensal de lista.
+    static string PlanRow(string plan, string color)
+    {
+        var perMonth = T("/mês", "/mo");
+        var price = PlanPrices.Find(plan) switch
+        {
+            null => $"[{Theme.Money}]US$[/] {Unavailable()}[{Theme.Unit}]{perMonth}[/]",
+            0 => $"[{Theme.Money}]{T("grátis", "free")}[/]",
+            var p => $"[{Theme.Money}]US$ {p:0.##}[/][{Theme.Unit}]{perMonth}[/]",
+        };
+        return $"[bold {color}]{Markup.Escape(plan)}[/]  {price}";
+    }
+
+    static string TokenBreakdown(long input, long output, long cache) =>
+        $"[{Theme.Input}]{Tokens(input)}[/] [{Theme.Unit}]{T("entrada", "input")} /[/] [{Theme.Output}]{Tokens(output)}[/] [{Theme.Unit}]{T("saída", "output")} /[/] [{Theme.Clock}]{Tokens(cache)}[/] [{Theme.Unit}]cache[/]";
+
+    // Marca um valor que nao foi possivel obter.
+    static string Unavailable() => $"[bold {Theme.Warn}]?[/]";
+
+    static void AddWindow(Table t, string label, ClaudeWindow? window, int colWidth, bool logsLoading)
+    {
+        if (window is null)
+        {
+            t.AddRow(Label(label), $"[{Theme.Unit}]{T("sem dado recente", "no recent data")}[/]");
+            return;
+        }
+
+        t.AddRow(Label(label), LoadBar((float)window.UsedPercent, ValueBar(colWidth)));
+        t.AddRow("", $"[{Theme.Unit}]{T("renova em", "resets in")}[/] {Elapsed(window.ResetsAt - DateTime.Now)}   {(logsLoading ? Loading("tokens") : QuotaEstimate(window))}");
+    }
+
+    // Quanto ainda cabe na janela, pela proporcao entre o percentual e o uso deste PC na mesma janela.
+    // A Anthropic nao publica o limite em tokens. O percentual vem arredondado (+/- 0,5 ponto), entao
+    // o resultado e uma faixa, que fica mais estreita conforme o uso cresce.
+    internal static string QuotaEstimate(ClaudeWindow window)
+    {
+        var pct = window.UsedPercent;
+        if (window.Used is not { Total: > 0 } used || pct < 1)
+            return $"{Dash} [{Theme.Unit}]tokens[/]";  // janela recem-renovada: ainda nao ha base para estimar
+
+        var left = Math.Max(0, 100 - pct);
+        var low = left / (pct + 0.5);
+        var high = left / (pct - 0.5);
+
+        return $"[{Theme.Unit}]~[/][bold]{Tokens(used.Total * low)}-{Tokens(used.Total * high)}[/] [{Theme.Unit}]tokens[/]";
+    }
+
+    static string Day(DateTime d) => T($"{d:dd/MM}", $"{d:MM/dd}");
+
+    static string Elapsed(TimeSpan t)
+    {
+        if (t < TimeSpan.FromMinutes(1)) return "<1 min";
+        if (t < TimeSpan.FromHours(1)) return $"{(int)t.TotalMinutes} min";
+        if (t < TimeSpan.FromDays(1)) return $"{(int)t.TotalHours}h {t.Minutes:00}min";
+        return $"{(int)t.TotalDays}d {t.Hours}h";
     }
 
     static string Tokens(double n) => n switch
@@ -374,31 +623,39 @@ static class Dashboard
         _ => $"{n:F0}",
     };
 
-    static string Int(double v) => Math.Floor(v).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(',', '.');
-
     // ------------------------------------------------------------- Helpers
 
+    // Tabela rotulo/valor com a coluna de rotulos alinhada em todos os paineis.
+    static Table Kv() => new Table()
+        .Border(TableBorder.None)
+        .HideHeaders()
+        .AddColumn(new TableColumn("k").Width(LabelWidth).NoWrap())
+        .AddColumn(new TableColumn("v"));
+
+    // Barra na coluna de valor de Kv: desconta bordas, rotulo, margens e o percentual escrito.
+    static int ValueBar(int colWidth) => BarWidth(colWidth, 27, int.MaxValue);
+
     // Largura da barra = largura da coluna menos o espaco ocupado pelo resto da linha, limitada a [4, max].
-    static int BarWidth(int colWidth, int reserved, int max) => Math.Clamp(colWidth - reserved, 4, max);
+    static int BarWidth(int colWidth, int reserved, int max) => Math.Clamp(colWidth - reserved, 4, Math.Max(max, 4));
 
-    static Panel Unavailable(string title, string color) =>
-        Styled(new Markup($"[{Theme.Unit}]nao detectado[/]"), title, color);
+    static Panel Missing(string title, string color, string icon) =>
+        Styled(new Markup($"[{Theme.Unit}]{T("não detectado", "not detected")}[/]"), title, color, icon);
 
-    // Painel com borda e titulo na cor de destaque da secao.
-    static Panel Styled(IRenderable content, string title, string color, string? subtitle = null) =>
+    // Painel discreto: a borda fica neutra e so o titulo leva a cor do componente.
+    static Panel Styled(IRenderable content, string title, string color, string icon, string? subtitle = null) =>
         new Panel(content)
             .Header(subtitle is null
-                ? $"[bold {color}] {title} [/]"
-                : $"[bold {color}] {title} [/][{Theme.Unit}]{Markup.Escape(subtitle)} [/]")
+                ? $" [{color}]{Markup.Escape(icon)}[/][bold {color}]{Markup.Escape(title)}[/] "
+                : $" [{color}]{Markup.Escape(icon)}[/][bold {color}]{Markup.Escape(title)}[/]  [{Theme.Unit}]{Markup.Escape(subtitle)}[/] ")
             .Border(BoxBorder.Rounded)
-            .BorderStyle(Style.Parse(color))
+            .BorderStyle(Style.Parse(Theme.PanelBorder))
             .Expand();
 
     static string Label(string text) => $"[{Theme.Label}]{Markup.Escape(text)}[/]";
 
-    static string Head(string text, string color) => $"[bold {color}]{text}[/]";
+    static string Head(string text, string color) => $"[{color}]{Markup.Escape(text)}[/]";
 
-    static string Key(string key) => $"[bold black on {Theme.KeyBg}] {key} [/]";
+    internal static string Key(string key) => $"[bold black on {Theme.KeyBg}] {key} [/]";
 
     static string Value(string number, string unit, string color = Theme.Value) =>
         unit.Length == 0 ? $"[bold {color}]{number}[/] " : $"[bold {color}]{number}[/] [{Theme.Unit}]{unit}[/]";
@@ -418,39 +675,52 @@ static class Dashboard
         return int.TryParse(digits, out var i) ? i : 0;
     }
 
-    static string TempMarkup(float? v)
-    {
-        if (v is null) return Dash;
-        var color = v >= 85 ? Theme.Bad : v >= 70 ? Theme.Warn : v >= 45 ? Theme.Good : Theme.Cool;
-        return $"[bold {color}]{v:F0}[/] [{Theme.Unit}]{(Unicode ? "\u00b0C" : "C")}[/]";
-    }
+    static string TempColor(float v) =>
+        v >= 85 ? Theme.Bad : v >= 70 ? Theme.Warn : v >= 45 ? Theme.Good : Theme.Cool;
 
-    // Barra com gradiente: cada celula preenchida recebe a cor da faixa em que esta.
-    static string LoadBar(float? v, int width)
+    static string DegreeUnit => Unicode ? "°C" : "C";
+
+    static string TempMarkup(float? v) => TempBadge(v);
+
+    // Temperatura sempre com fundo na cor da faixa, para ser lida de relance.
+    static string TempBadge(float? v) =>
+        v is { } t ? $"[bold black on {TempColor(t)}] {t:F0} {DegreeUnit} [/]" : Dash;
+
+    static string MainTemp(ISensor? sensor) => $"{TempBadge(SensorDisplay.Get(sensor))}  {TempRange(sensor)}";
+
+    // Menor e maior leitura desde que o app abriu (brutas, sem a media da tela).
+    static string TempRange(ISensor? sensor) =>
+        sensor is null ? "" : $"[{Theme.Unit}]min[/] {TempNumber(SensorDisplay.Min(sensor))} [{Theme.Unit}]max[/] {TempNumber(sensor.Max)}";
+
+    static string TempNumber(float? v) =>
+        v is { } t && t > 0 ? $"[{TempColor(t)}]{t:F0}{DegreeUnit}[/]" : Dash;
+
+    static string SensorBar(ISensor? sensor, int width) =>
+        LoadBar(SensorDisplay.Get(sensor), width, SensorDisplay.Bar(sensor));
+
+    // Barra de uma cor so, a do alerta do valor atual. O percentual escrito e sempre v;
+    // barValue permite a barra estar a caminho dele.
+    static string LoadBar(float? v, int width, float? barValue = null)
     {
         if (v is null) return Dash;
         var pct = Math.Clamp(v.Value, 0, 100);
-        var filled = (int)Math.Round(pct / 100 * width);
-        var (full, empty) = Unicode ? ('\u2588', '\u2591') : ('#', '.');
+        var color = LoadColor(pct);
+        var exact = Math.Clamp(barValue ?? v.Value, 0, 100) / 100 * width;
+        var filled = Unicode ? (int)Math.Floor(exact) : (int)Math.Round(exact);
 
-        var sb = new System.Text.StringBuilder();
-        string? current = null;
-        for (var i = 0; i < filled; i++)
-        {
-            var color = LoadColor((i + 0.5f) / width * 100);
-            if (color != current)
-            {
-                if (current is not null) sb.Append("[/]");
-                sb.Append('[').Append(color).Append(']');
-                current = color;
-            }
-            sb.Append(full);
-        }
-        if (current is not null) sb.Append("[/]");
-        if (filled < width) sb.Append($"[{Theme.BarEmpty}]{new string(empty, width - filled)}[/]");
+        // Meia celula (U+2578), para a barra deslizar com mais suavidade.
+        var half = Unicode && filled < width && exact - filled >= 0.5;
+        var (full, empty) = Unicode ? ('\u2501', '\u2500') : ('=', '-');
 
-        return $"{sb} [bold {LoadColor(pct)}]{pct,3:F0}%[/]";
+        var bar = new string(full, filled) + (half ? "\u2578" : "");
+        var used = filled + (half ? 1 : 0);
+        var rest = used < width ? $"[{Theme.BarEmpty}]{new string(empty, width - used)}[/]" : "";
+        return $"[{color}]{bar}[/]{rest} [bold {color}]{pct,3:F0}%[/]";
     }
+
+    // Faixas do orcamento, aplicadas aos valores: ate 1/3 verde, ate 2/3 laranja, acima disso vermelho.
+    internal static string BudgetColor(float pct) =>
+        pct < 100f / 3 ? Theme.Good : pct < 200f / 3 ? Theme.Hot : Theme.Bad;
 
     static string LoadColor(float pct) =>
         pct >= 85 ? Theme.Bad : pct >= 70 ? Theme.Hot : pct >= 50 ? Theme.Warn : Theme.Good;
@@ -467,11 +737,18 @@ static class Theme
     public const string Mobo = "orange1";
     public const string Storage = "gold1";
     public const string Copilot = "orchid";
+    public const string Claude = "salmon1";
 
-    public const string Title = "deepskyblue1";
-    public const string Rule = "grey35";
+    public const string HardwareSection = "steelblue1";
+    public const string AiSection = "mediumorchid1";
+
+    public const string Title = "white";
+    public const string PanelBorder = "grey30";
     public const string KeyBg = "grey70";
-    public const string TableBorder = "grey35";
+    public const string Selected = "grey23";
+    public const string Highlight = "grey35";
+    public const string TabActive = "dodgerblue2";
+    public const string TabIdle = "grey19";
 
     public const string Label = "grey70";
     public const string Unit = "grey50";

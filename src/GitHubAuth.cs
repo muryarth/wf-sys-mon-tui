@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
+using static WfSysMon.L;
+
 namespace WfSysMon;
 
 enum AuthStep { Idle, InstallingGh, Starting, WaitingUser, Done, Failed }
@@ -22,34 +24,55 @@ sealed partial class GitHubAuth : IDisposable
 
     public event Action? Completed;
 
+    // Depois de sair: esquece o resultado do ultimo login.
+    public void Reset()
+    {
+        if (!InProgress) _state = new(AuthStep.Idle);
+    }
+
     public void Start()
     {
         if (InProgress) return;
         _ = Task.Run(RunAsync);
     }
 
+    // Remove o login do GitHub CLI neste PC. Devolve null em caso de sucesso, ou o motivo da falha.
+    public static async Task<string?> LogoutAsync()
+    {
+        foreach (var env in new[] { "GH_TOKEN", "GITHUB_TOKEN" })
+            if (Environment.GetEnvironmentVariable(env) is { Length: > 0 })
+                return T($"o token vem da variável {env}; remova-a para sair", $"the token comes from the {env} variable; remove it to sign out");
+
+        if (ExternalTool.PrepareHidden("gh", "auth logout --hostname github.com", GhDirs) is not { } psi)
+            return T("GitHub CLI não encontrado", "GitHub CLI not found");
+
+        psi.RedirectStandardInput = true;
+        using var proc = Process.Start(psi);
+        if (proc is null) return T("falha ao iniciar o gh", "could not start gh");
+
+        proc.StandardInput.Close();
+        _ = proc.StandardOutput.ReadToEndAsync();
+        var error = await proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        return proc.ExitCode == 0 ? null : error.Trim();
+    }
+
     async Task RunAsync()
     {
         try
         {
-            var gh = FindGh();
-            if (gh is null)
+            if (FindGh() is null)
             {
-                _state = new(AuthStep.InstallingGh, Message: "instalando GitHub CLI via winget...");
+                _state = new(AuthStep.InstallingGh, Message: T("instalando o GitHub CLI via winget...", "installing GitHub CLI via winget..."));
                 await InstallGhAsync();
-                gh = FindGh() ?? throw new InvalidOperationException("GitHub CLI nao encontrado apos a instalacao");
+                _ = FindGh() ?? throw new InvalidOperationException(T("GitHub CLI não encontrado após a instalação", "GitHub CLI not found after installation"));
             }
 
-            _state = new(AuthStep.Starting, Message: "iniciando login...");
-            var psi = new ProcessStartInfo(gh, "auth login --hostname github.com --git-protocol https --web --skip-ssh-key")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            _proc = Process.Start(psi) ?? throw new InvalidOperationException("falha ao iniciar o gh");
+            _state = new(AuthStep.Starting, Message: T("iniciando login...", "starting sign-in..."));
+            var psi = ExternalTool.PrepareHidden("gh", "auth login --hostname github.com --git-protocol https --web --skip-ssh-key", GhDirs)
+                ?? throw new InvalidOperationException(T("GitHub CLI não encontrado", "GitHub CLI not found"));
+            psi.RedirectStandardInput = true;
+            _proc = Process.Start(psi) ?? throw new InvalidOperationException(T("falha ao iniciar o gh", "could not start gh"));
             _proc.StandardInput.Close();
 
             var lastLine = "";
@@ -71,8 +94,8 @@ sealed partial class GitHubAuth : IDisposable
 
             await _proc.WaitForExitAsync();
             _state = _proc.ExitCode == 0
-                ? new(AuthStep.Done, Message: "conectado ao GitHub")
-                : new(AuthStep.Failed, Message: $"login nao concluido: {lastLine}");
+                ? new(AuthStep.Done, Message: T("conectado ao GitHub", "connected to GitHub"))
+                : new(AuthStep.Failed, Message: T($"login não concluído: {lastLine}", $"sign-in not completed: {lastLine}"));
         }
         catch (Exception ex)
         {
@@ -89,23 +112,18 @@ sealed partial class GitHubAuth : IDisposable
 
     static async Task InstallGhAsync()
     {
-        var psi = new ProcessStartInfo("winget",
+        var psi = ExternalTool.PrepareHidden("winget",
             "install --id GitHub.cli -e --silent --accept-source-agreements --accept-package-agreements")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+            ?? throw new InvalidOperationException(T("winget indisponível; instale o GitHub CLI: https://cli.github.com", "winget unavailable; install GitHub CLI: https://cli.github.com"));
         Process? proc;
         try { proc = Process.Start(psi); }
         catch (System.ComponentModel.Win32Exception)
         {
-            throw new InvalidOperationException("winget indisponivel - instale o GitHub CLI: https://cli.github.com");
+            throw new InvalidOperationException(T("winget indisponível; instale o GitHub CLI: https://cli.github.com", "winget unavailable; install GitHub CLI: https://cli.github.com"));
         }
         using (proc)
         {
-            if (proc is null) throw new InvalidOperationException("falha ao iniciar o winget");
+            if (proc is null) throw new InvalidOperationException(T("falha ao iniciar o winget", "could not start winget"));
             _ = proc.StandardOutput.ReadToEndAsync();
             _ = proc.StandardError.ReadToEndAsync();
             await proc.WaitForExitAsync();
@@ -119,18 +137,13 @@ sealed partial class GitHubAuth : IDisposable
         catch (Exception) { /* o usuario ainda ve a URL na tela */ }
     }
 
-    public static string? FindGh()
-    {
-        var candidates = new List<string>
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "GitHub CLI", "gh.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "GitHub CLI", "gh.exe"),
-        };
-        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
-            candidates.Add(Path.Combine(dir.Trim(), "gh.exe"));
+    static readonly string[] GhDirs =
+    [
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "GitHub CLI"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "GitHub CLI"),
+    ];
 
-        return candidates.FirstOrDefault(File.Exists);
-    }
+    public static string? FindGh() => ExternalTool.Find("gh", GhDirs);
 
     [GeneratedRegex(@"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b")]
     private static partial Regex CodeRegex();
