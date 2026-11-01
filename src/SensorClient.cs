@@ -102,14 +102,17 @@ sealed class SensorClient(
             var line = await reader.ReadLineAsync(timeout.Token);
             if (line is null) return;
 
-            var frame = JsonSerializer.Deserialize<SensorFrame>(line);
-            if (frame is null) continue;
+            var header = JsonSerializer.Deserialize<SensorFrameHeader>(line);
+            if (header is null) continue;
 
-            if (frame.Protocol != SensorProtocol.Version)
+            if (header.Protocol != SensorProtocol.Version)
             {
                 _link = SensorLink.Outdated;
                 continue;
             }
+
+            var frame = JsonSerializer.Deserialize<SensorFrame>(line, SensorProtocol.Json);
+            if (frame is null) continue;
 
             onFrame(frame.Hardware.Select(h => (IHardware)new RemoteHardware(h)).ToList());
             _link = SensorLink.Connected;

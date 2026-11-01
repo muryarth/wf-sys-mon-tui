@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using LibreHardwareMonitor.Hardware;
 
 namespace WfSysMon;
@@ -9,12 +11,18 @@ record HardwareDto(string Id, string Name, HardwareType Type, List<SensorDto> Se
 
 record SensorFrame(int Protocol, List<HardwareDto> Hardware);
 
+// So a versao: serve para reconhecer um formato diferente sem precisar entender o resto da linha.
+record SensorFrameHeader(int Protocol);
+
 static class SensorProtocol
 {
     public const string PipeName = "wf-sys-mon-sensors";
 
     // Aumente ao mudar o formato: a TUI avisa que o servico instalado precisa ser atualizado.
-    public const int Version = 1;
+    // Versao 2: tipos por nome. O numero muda de sentido quando a biblioteca de sensores acrescenta tipos.
+    public const int Version = 2;
+
+    public static readonly JsonSerializerOptions Json = new() { Converters = { new JsonStringEnumConverter() } };
 
     public static List<HardwareDto> Snapshot(IEnumerable<IHardware> hardware) => hardware.Select(Convert).ToList();
 
