@@ -4,18 +4,20 @@ namespace WfSysMon;
 
 // Valores mostrados na tela. Os sensores oscilam a cada leitura, entao os numeros so mudam a cada
 // DisplaySeconds leituras (uma por segundo) e mostram a media das ultimas Window: ficam legiveis e ainda
-// reagem em poucos segundos. As barras deslizam ate o novo valor (ease-out). Minimo e maximo continuam
+// reagem em poucos segundos. As barras seguem uma mola criticamente amortecida: aceleram, desaceleram,
+// nao passam do alvo e, se o valor mudar no meio do caminho, mudam de rumo sem tranco. Minimo e maximo continuam
 // vindo das leituras brutas (ISensor.Min/Max), sem suavizacao.
 // Nao e thread-safe: tudo aqui roda sob o mesmo lock dos sensores (veja Program).
 static class SensorDisplay
 {
     const int Window = 3;
-    const double EaseSeconds = 0.25;   // constante de tempo: chega perto do alvo em cerca de 0,7 s
     const float SettleDistance = 0.2f;  // diferenca invisivel na barra: encerra a animacao
+    const float SettleSpeed = 2f;       // pontos percentuais por segundo
 
     static readonly Dictionary<string, Queue<float>> Samples = [];
     static readonly Dictionary<string, float> Shown = [];
     static readonly Dictionary<string, float> Bars = [];
+    static readonly Dictionary<string, float> Speeds = [];
     static readonly HashSet<string> BarIds = [];
     static readonly Dictionary<string, float> Minimums = [];
     static int _reads;
@@ -25,6 +27,7 @@ static class SensorDisplay
         Samples.Clear();
         Shown.Clear();
         Bars.Clear();
+        Speeds.Clear();
         BarIds.Clear();
         Minimums.Clear();
         _reads = 0;
@@ -71,10 +74,21 @@ static class SensorDisplay
             Shown[id] = queue.Average();
     }
 
-    // Avanca as barras. Devolve true enquanto alguma ainda estiver em movimento.
+    // Quanto a barra leva para responder. Com leituras raras o movimento pode ser mais lento, sem
+    // deixar de chegar antes da leitura seguinte; o tempo total e cerca de 4 vezes este valor.
+    internal static double SmoothSeconds(int displaySeconds) => displaySeconds switch
+    {
+        <= 1 => 0.18,
+        2 => 0.3,
+        _ => 0.6,
+    };
+
+    // Avanca as barras pela solucao exata da mola, entao o resultado nao depende da taxa de quadros.
+    // Devolve true enquanto alguma ainda estiver em movimento.
     public static bool Animate(double elapsedSeconds)
     {
-        var step = (float)(1 - Math.Exp(-elapsedSeconds / EaseSeconds));
+        var omega = 2 / SmoothSeconds(Settings.Current.DisplaySeconds);
+        var decay = Math.Exp(-omega * elapsedSeconds);
         var moved = false;
         foreach (var id in BarIds)
         {
@@ -85,10 +99,24 @@ static class SensorDisplay
                 moved = true;
                 continue;
             }
-            if (bar == target) continue;
+            var speed = Speeds.GetValueOrDefault(id);
+            if (bar == target && speed == 0) continue;
 
-            var next = bar + (target - bar) * step;
-            Bars[id] = Math.Abs(target - next) < SettleDistance ? target : next;
+            double offset = bar - target;
+            var c = speed + omega * offset;
+            var nextOffset = (offset + c * elapsedSeconds) * decay;
+            var nextSpeed = (c - omega * (offset + c * elapsedSeconds)) * decay;
+
+            if (Math.Abs(nextOffset) < SettleDistance && Math.Abs(nextSpeed) < SettleSpeed)
+            {
+                Bars[id] = target;
+                Speeds[id] = 0;
+            }
+            else
+            {
+                Bars[id] = Math.Clamp(target + (float)nextOffset, 0, 100);
+                Speeds[id] = (float)nextSpeed;
+            }
             moved = true;
         }
         return moved;

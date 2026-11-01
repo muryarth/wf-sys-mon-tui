@@ -116,7 +116,6 @@ static class Dashboard
         var t = Kv();
         t.AddRow(Label(T("Plano", "Plan")), Loading());
         t.AddRow(Label(T("Consumo", "Usage")), FadedBar(colWidth));
-        t.AddRow(Label(T("Gasto", "Spent")), Faded);
         t.AddRow(Label(T("Cota plano", "Plan quota")), Faded);
         t.AddRow(Label("Extra budget"), Faded);
         t.AddRow(Label(T("Restante", "Left")), Faded);
@@ -129,9 +128,8 @@ static class Dashboard
     // Algum painel ainda esta esperando dados: o indicador precisa continuar girando.
     public static bool IsLoading(IReadOnlyList<IHardware> hardware, CopilotState copilot, ClaudeState claude) =>
         hardware.Count == 0
-        || (copilot.Snapshot is null && !copilot.NeedsLogin && copilot.Error is null)
-        || !claude.AccountChecked
-        || claude.Month is null;
+        || (Settings.Current.ShowCopilot && copilot.Snapshot is null && !copilot.NeedsLogin && copilot.Error is null)
+        || (Settings.Current.ShowClaude && (!claude.AccountChecked || claude.Month is null));
 
     public static List<Panel> HardwarePanels(IReadOnlyList<IHardware> hardware, int colWidth)
     {
@@ -161,7 +159,10 @@ static class Dashboard
     }
 
     public static List<Panel> AiPanels(CopilotState copilot, ClaudeState claude, AuthState auth, int colWidth) =>
-        [CopilotPanel(copilot, auth, colWidth), ClaudePanel(claude, colWidth)];
+        [
+            .. Settings.Current.ShowCopilot ? [CopilotPanel(copilot, auth, colWidth)] : Array.Empty<Panel>(),
+            .. Settings.Current.ShowClaude ? [ClaudePanel(claude, colWidth)] : Array.Empty<Panel>(),
+        ];
 
     // ---------------------------------------------------------------- CPU
 
@@ -387,9 +388,9 @@ static class Dashboard
         {
             t.AddRow(Label(T("Consumo", "Usage")), LoadBar(usedPct, ValueBar(colWidth)));
             // O valor em AIC fica na ponta direita de cada categoria; cobranca legada nao usa creditos.
-            string Row(double used, double limit, bool strong, bool showLimit = true)
+            string Row(double used, double limit, bool showLimit = true)
             {
-                var money = $"[{(strong ? $"bold {band}" : band)}]US$ {used * usdPerUnit:F2}[/]";
+                var money = $"[{band}]US$ {used * usdPerUnit:F2}[/]";
                 if (showLimit) money += $" [{Theme.Unit}]/ {limit * usdPerUnit:F2}[/]";
                 if (!snap.TokenBasedBilling) return money;
 
@@ -399,12 +400,11 @@ static class Dashboard
 
             var extraUsed = Math.Max(0, snap.Used - snap.Entitlement);
             var planUsed = snap.Used - extraUsed;
-            t.AddRow(Label(T("Gasto", "Spent")), Row(snap.Used, total, strong: true));
-            t.AddRow(Label(T("Cota plano", "Plan quota")), Row(planUsed, snap.Entitlement, strong: false));
+            t.AddRow(Label(T("Cota plano", "Plan quota")), Row(planUsed, snap.Entitlement));
             if (snap.ExtraBudget > 0)
-                t.AddRow(Label("Extra budget"), Row(extraUsed, snap.ExtraBudget, strong: false));
+                t.AddRow(Label("Extra budget"), Row(extraUsed, snap.ExtraBudget));
             else if (extraUsed > 0)
-                t.AddRow(Label("Extra budget"), Row(extraUsed, 0, strong: false, showLimit: false));
+                t.AddRow(Label("Extra budget"), Row(extraUsed, 0, showLimit: false));
             t.AddRow(Label(T("Restante", "Left")), $"[bold {band}]US$ {remaining * usdPerUnit:F2}[/]");
         }
 
@@ -462,7 +462,7 @@ static class Dashboard
                     $"[{Theme.Warn}]{T("aguardando autorização...", "waiting for authorization...")}[/]",
                 ];
 
-            case AuthStep.Done:
+            case AuthStep.Done when state.Snapshot is null && state.Error is null:
                 return [$"[bold {Theme.Good}]{T("conectado!", "connected!")}[/] [{Theme.Warn}]{T("carregando dados do Copilot...", "loading Copilot data...")}[/]"];
 
             case AuthStep.Failed:
@@ -512,7 +512,7 @@ static class Dashboard
         {
             t.AddRow(Label(T("Cota", "Quota")), state.HasQuotaFiles
                 ? $"[{Theme.Warn}]{T("sem dado recente", "no recent data")}[/]"
-                : $"[{Theme.Warn}]{T("sem dados", "no data")}[/]  {Key("A")}");
+                : $"[{Theme.Warn}]{T("sem dados", "no data")}[/]  {Key("S")}");
         }
         else
         {
@@ -586,7 +586,10 @@ static class Dashboard
         }
 
         t.AddRow(Label(label), LoadBar((float)window.UsedPercent, ValueBar(colWidth)));
-        t.AddRow("", $"[{Theme.Unit}]{T("renova em", "resets in")}[/] {Elapsed(window.ResetsAt - DateTime.Now)}   {(logsLoading ? Loading("tokens") : QuotaEstimate(window))}");
+        t.AddRow("", WithRightBadge(
+            $"[{Theme.Unit}]{T("renova em", "resets in")}[/] {Elapsed(window.ResetsAt - DateTime.Now)}",
+            logsLoading ? Loading("tokens") : QuotaEstimate(window),
+            colWidth));
     }
 
     // Quanto ainda cabe na janela, pela proporcao entre o percentual e o uso deste PC na mesma janela.

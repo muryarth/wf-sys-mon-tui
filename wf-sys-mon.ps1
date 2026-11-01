@@ -300,7 +300,7 @@ if ($Install) {
     }
     if ($installPawnIo -and -not (Install-Package 'namazso.PawnIO' 'PawnIO')) {
         $pending = $true
-        Write-Note (Get-Text 'Dá para instalar depois na aba Accounts.' 'You can install it later on the Accounts tab.')
+        Write-Note (Get-Text 'Dá para instalar depois na aba Settings.' 'You can install it later on the Settings tab.')
     }
 
     $serviceOk = Invoke-Step $serviceName $dotnet "`"$dll`" --request-service-install" @(0) (Get-Text 'confirme no Windows' 'confirm in Windows')
