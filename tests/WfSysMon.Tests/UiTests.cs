@@ -125,7 +125,7 @@ public class UiTests
         var half = a1.Build(Data(), 143, 58);
         Check("meia tela: colunas iguais", half.Columns.Count == 2 && half.Columns[0].W == half.Columns[1].W, $"{half.Columns[0].W}");
         var vert = a1.Build(Data(), 90, 81);
-        Check("vertical: coluna unica usa toda a largura", vert.Columns.Count == 1 && vert.Columns[0].X == 0 && vert.Columns[0].W == 90);
+        Check("vertical: coluna unica usa a largura, menos a ultima celula", vert.Columns.Count == 1 && vert.Columns[0].X == 0 && vert.Columns[0].W == 89);
         Check("IsVertical", TuiApp.IsVertical(90, 81) && !TuiApp.IsVertical(286, 58) && !TuiApp.IsVertical(143, 58));
         var linhaDaBarra = Dump(vert).Split('\n').First(l => l.Contains("Total load") || l.Contains("Uso total"));
         Check("coluna unica: barra estica", linhaDaBarra.Count(c => c is '\u2501' or '\u2500' or '\u2578') >= 60, linhaDaBarra.Trim());
@@ -641,6 +641,17 @@ public class UiTests
         a41.Handle(new KeyInput(ConsoleKey.R, 'r'));
         Check("R atualiza e avisa", log41.Contains("refresh") && Dump(a41.Build(Data(), 286, 58)).Contains("Atualizando"));
 
+        // A barra de rolagem nunca cai na ultima celula, onde o fim de linha do desenho a apagaria
+        foreach (var (lb, ab) in new[] { (90, 20), (120, 30), (143, 20), (144, 20), (127, 20), (128, 20), (286, 20), (70, 20) })
+        {
+            var (asb, _) = NewApp();
+            var qb = asb.Build(Data(), lb, ab);
+            Check($"{lb}x{ab}: nenhuma coluna toca a ultima celula", qb.Columns.All(c => c.X + c.W < lb), string.Join(",", qb.Columns.Select(c => c.X + c.W)));
+            var cb = qb.Columns[^1];
+            var linhasB = Dump(qb).Split('\n');
+            Check($"{lb}x{ab}: barra de rolagem aparece", cb.ContentHeight > cb.H && linhasB.Skip(cb.Y).Take(cb.H).Count(l => l.Length > cb.X + cb.W - 1 && l[cb.X + cb.W - 1] is '┃' or '│') == cb.H);
+        }
+
         // Mostrar ou ocultar agentes
         Check("agentes visiveis por padrao", new Settings().ShowCopilot && new Settings().ShowClaude);
         var semChaves = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"Language\":\"pt\"}")!;
@@ -670,7 +681,7 @@ public class UiTests
         Check("so o Copilot", soCopilot.Contains("INTELIG") && soCopilot.Contains("GitHub Copilot") && !soCopilot.Contains("Cota 5h"));
 
         settings.ShowCopilot = false;
-        foreach (var (lg, al, largura) in new[] { (286, 58, 110), (143, 58, 110), (90, 81, 90), (70, 90, 70) })
+        foreach (var (lg, al, largura) in new[] { (286, 58, 110), (143, 58, 110), (90, 81, 89), (70, 90, 69) })
         {
             var (ag, _) = NewApp();
             var quadro = ag.Build(Data(), lg, al);

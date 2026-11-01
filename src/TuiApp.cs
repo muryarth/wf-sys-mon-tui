@@ -274,8 +274,11 @@ sealed class TuiApp(UiActions actions)
     // Pouco espaco horizontal: uma coluna so, usando toda a largura. Com espaco: uma coluna por secao,
     // de tamanhos iguais, limitadas a MaxColumnWidth e centralizadas lado a lado. Com todos os agentes
     // ocultos, a secao de IA nao existe e o hardware fica sozinho, centralizado.
+    // A ultima celula do terminal fica livre: o "apagar ate o fim da linha" do desenho apagaria o que
+    // estivesse nela, como a barra de rolagem, porque o cursor continua ali depois de escrever.
     static List<ColumnPlan> PlanColumns(int width, int height)
     {
+        width--;
         var columnWidth = (width - ColumnGap) / 2;
         var narrow = IsVertical(width, height) || columnWidth < MinColumnWidth;
 
