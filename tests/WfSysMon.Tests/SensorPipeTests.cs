@@ -140,6 +140,33 @@ public class SensorPipeTests
     {
         var name = PipeName();
         var frame = System.Text.Json.JsonSerializer.Serialize(new SensorFrame(SensorProtocol.Version + 1, [])) + "\n";
+        AssertOutdated(name, frame);
+    }
+
+    // Servico da versao anterior, com os tipos em numero.
+    [Fact]
+    public void PreviousProtocolWithNumericTypesIsReportedAsOutdated() =>
+        AssertOutdated(PipeName(), """{"Protocol":1,"Hardware":[{"Id":"/cpu/0","Name":"CPU","Type":2,"Sensors":[],"Sub":[]}]}""" + "\n");
+
+    // Um formato futuro pode trazer o que esta versao nao entende: o aviso ainda precisa aparecer.
+    [Fact]
+    public void FutureProtocolWithUnknownTypesIsReportedAsOutdated() =>
+        AssertOutdated(PipeName(), $$"""{"Protocol":{{SensorProtocol.Version + 1}},"Hardware":[{"Id":"/cpu/0","Name":"CPU","Type":"Quantum","Sensors":[],"Sub":[]}]}""" + "\n");
+
+    [Fact]
+    public void SensorTypesTravelByName()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new SensorFrame(SensorProtocol.Version, Sample(50)), SensorProtocol.Json);
+        Assert.Contains("\"Type\":\"Temperature\"", json);
+        Assert.Contains("\"Type\":\"Cpu\"", json);
+
+        var back = System.Text.Json.JsonSerializer.Deserialize<SensorFrame>(json, SensorProtocol.Json)!;
+        Assert.Equal(SensorType.Temperature, back.Hardware[0].Sensors[0].Type);
+        Assert.Equal(HardwareType.Motherboard, back.Hardware[0].Sub[0].Type);
+    }
+
+    static void AssertOutdated(string name, string frame)
+    {
         using var old = new NamedPipeServerStream(name, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
         var called = false;

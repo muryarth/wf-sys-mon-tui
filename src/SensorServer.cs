@@ -101,7 +101,7 @@ sealed class SensorServer(
                         opened = true;
                     }
 
-                    var line = JsonSerializer.Serialize(new SensorFrame(SensorProtocol.Version, sample())) + "\n";
+                    var line = JsonSerializer.Serialize(new SensorFrame(SensorProtocol.Version, sample()), SensorProtocol.Json) + "\n";
                     var bytes = Encoding.UTF8.GetBytes(line);
                     await Task.WhenAll(clients.Select(c => SendAsync(c, bytes)));
                 }

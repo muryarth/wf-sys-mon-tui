@@ -102,23 +102,49 @@ static class ServiceInstaller
     {
         var user = new SecurityIdentifier(userSid);  // valida antes de usar na linha de comando do servico
 
-        RemoveService();
-        CopyFiles();
-
+        var source = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
+        var folders = string.Equals(source, InstallDir, StringComparison.OrdinalIgnoreCase) ? null : new InstallFolders(InstallDir);
         var dll = Path.Combine(InstallDir, Path.GetFileName(typeof(ServiceInstaller).Assembly.Location));
         var command = $"\"{DotnetPath}\" \"{dll}\" {RunArgument} {AllowArgument} {user.Value}";
 
-        var code = RunSc("create", ServiceName, "binPath=", command, "start=", "delayed-auto", "DisplayName=", "WF System Monitor Sensors");
-        if (code != 0) return code;
+        // Se a copia falhar aqui, o servico instalado nem chegou a parar.
+        try { folders?.Stage(source); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            folders?.Discard();
+            return 1;
+        }
 
-        RunSc("description", ServiceName, "Reads hardware sensors for WF System Monitor. Only publishes values to the signed-in user.");
-        RunSc("failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/5000//");
-        return RunSc("start", ServiceName);
+        var existed = Exists();
+        if (existed) Stop();
+
+        try { folders?.Swap(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            folders?.Discard();
+            if (existed) RunSc("start", ServiceName);
+            return 1;
+        }
+
+        var code = Register(command, existed);
+        if (code == 0) code = RunSc("start", ServiceName);
+        if (code != 0)
+        {
+            // Volta a versao anterior; sem uma, o erro aparece e nada mais muda.
+            try { folders?.Restore(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* o codigo de erro ja informa a falha */ }
+            if (existed) RunSc("start", ServiceName);
+            return code;
+        }
+
+        folders?.Discard();
+        return 0;
     }
 
     public static int Uninstall()
     {
         RemoveService();
+        new InstallFolders(InstallDir).Discard();
         for (var i = 0; i < 10 && Directory.Exists(InstallDir); i++)
         {
             try { Directory.Delete(InstallDir, recursive: true); }
@@ -127,16 +153,34 @@ static class ServiceInstaller
         return Directory.Exists(InstallDir) ? 1 : 0;
     }
 
-    static void RemoveService()
+    // O servico existente e reconfigurado, nunca removido: uma falha nao deixa o PC sem ele.
+    static int Register(string command, bool existed)
     {
-        if (RunSc("query", ServiceName) != 0) return;  // nao instalado
+        var code = RunSc(existed ? "config" : "create", ServiceName, "binPath=", command, "start=", "delayed-auto", "DisplayName=", "WF System Monitor Sensors");
+        if (code != 0) return code;
 
+        RunSc("description", ServiceName, "Reads hardware sensors for WF System Monitor. Only publishes values to the signed-in user.");
+        RunSc("failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/5000//");
+        return 0;
+    }
+
+    static bool Exists() => RunSc("query", ServiceName) == 0;
+
+    static void Stop()
+    {
         RunSc("stop", ServiceName);
         for (var i = 0; i < 20; i++)
         {
             if (Status() is "STOPPED" or null) break;
             Thread.Sleep(500);
         }
+    }
+
+    static void RemoveService()
+    {
+        if (!Exists()) return;  // nao instalado
+
+        Stop();
         RunSc("delete", ServiceName);
 
         // O Windows so conclui a remocao depois que o nome deixa de existir.
@@ -148,22 +192,6 @@ static class ServiceInstaller
         var output = RunScOutput("query", ServiceName);
         if (output is null) return null;
         return output.Contains("STOPPED") ? "STOPPED" : "OTHER";
-    }
-
-    static void CopyFiles()
-    {
-        var source = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
-        if (string.Equals(source, InstallDir, StringComparison.OrdinalIgnoreCase)) return;
-        Directory.CreateDirectory(InstallDir);
-
-        // ".old": versoes substituidas por uma atualizacao, ainda nao apagadas.
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".old", StringComparison.OrdinalIgnoreCase)))
-        {
-            var relative = Path.GetRelativePath(source, file);
-            var target = Path.Combine(InstallDir, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
-        }
     }
 
     static int RunSc(params string[] args) => RunScCore(args).Code;
@@ -191,5 +219,78 @@ static class ServiceInstaller
         var output = proc.StandardOutput.ReadToEnd();
         proc.WaitForExit();
         return (proc.ExitCode, output);
+    }
+}
+
+// Troca a pasta instalada de uma vez: a copia nova fica pronta ao lado dela e a anterior so e apagada
+// depois que a nova funciona. As pastas ao lado herdam a protecao de Program Files.
+sealed class InstallFolders(string target, int moveAttempts = 20)
+{
+    string Staged => target + ".new";
+    string Previous => target + ".previous";
+
+    public void Stage(string source)
+    {
+        Delete(Staged);
+
+        // ".old": versoes substituidas por uma atualizacao, ainda nao apagadas.
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".old", StringComparison.OrdinalIgnoreCase)))
+        {
+            var destination = Path.Combine(Staged, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file, destination);
+        }
+    }
+
+    public void Swap()
+    {
+        Delete(Previous);
+        if (Directory.Exists(target)) Move(target, Previous);
+
+        try { Move(Staged, target); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (Directory.Exists(Previous)) Move(Previous, target);
+            throw;
+        }
+    }
+
+    public void Restore()
+    {
+        if (!Directory.Exists(Previous)) return;
+        Delete(target);
+        Move(Previous, target);
+    }
+
+    // Limpeza: o que nao sair agora nao atrapalha, e a proxima instalacao apaga antes de usar.
+    public void Discard()
+    {
+        foreach (var dir in new[] { Staged, Previous })
+        {
+            try { Delete(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    static void Delete(string dir)
+    {
+        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+    }
+
+    // O processo do servico pode demorar um instante para soltar os arquivos depois de parar.
+    void Move(string from, string to)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Move(from, to);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < moveAttempts)
+            {
+                Thread.Sleep(250);
+            }
+        }
     }
 }
