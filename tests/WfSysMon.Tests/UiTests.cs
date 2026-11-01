@@ -637,8 +637,7 @@ public class UiTests
 
         // "Atualizado" por ultimo e separado, nos dois paineis
         var (a42, _) = NewApp();
-        var linhas42 = Dump(a42.Build(Data(), 90, 81)).Split('
-');
+        var linhas42 = Dump(a42.Build(Data(), 90, 81)).Split('\n');
         bool Vazia(string l) => l.Replace("│", "").Replace("┃", "").Trim().Length == 0;
         var atCopilot = Array.FindIndex(linhas42, l => l.Contains("Atualizado"));
         var atClaude = Array.FindLastIndex(linhas42, l => l.Contains("Atualizado"));
