@@ -635,6 +635,18 @@ public class UiTests
             }
         }
 
+        // "Atualizado" por ultimo e separado, nos dois paineis
+        var (a42, _) = NewApp();
+        var linhas42 = Dump(a42.Build(Data(), 90, 81)).Split('
+');
+        bool Vazia(string l) => l.Replace("│", "").Replace("┃", "").Trim().Length == 0;
+        var atCopilot = Array.FindIndex(linhas42, l => l.Contains("Atualizado"));
+        var atClaude = Array.FindLastIndex(linhas42, l => l.Contains("Atualizado"));
+        var tokensCopilot = Array.FindIndex(linhas42, l => l.Contains("Tokens"));
+        var mesClaude = Array.FindIndex(linhas42, l => l.Contains("Este mês"));
+        Check("Copilot: atualizado depois dos tokens, separado", atCopilot > tokensCopilot && Vazia(linhas42[atCopilot - 1]) && linhas42[atCopilot + 1].Contains('╰'));
+        Check("Claude: atualizado depois do mes, separado", atClaude > mesClaude && Vazia(linhas42[atClaude - 1]) && linhas42[atClaude + 1].Contains('╰'));
+
         // R avisa o que esta atualizando
         var (a41, log41) = NewApp();
         a41.Build(Data(), 286, 58);

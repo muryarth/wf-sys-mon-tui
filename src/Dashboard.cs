@@ -121,6 +121,7 @@ static class Dashboard
         t.AddRow(Label(T("Restante", "Left")), Faded);
         t.AddEmptyRow();
         t.AddRow(Label("Tokens"), Faded);
+        t.AddEmptyRow();
         t.AddRow(Label(T("Atualizado", "Updated")), Faded);
         return Styled(t, "GitHub Copilot", Theme.Copilot, Icons.Copilot);
     }
@@ -431,6 +432,8 @@ static class Dashboard
             t.AddRow(Label("Tokens"), Unavailable());
         }
 
+        // Vale para o painel todo: fica por ultimo e separado do resto.
+        t.AddEmptyRow();
         var status = state.Loading ? $"[{Theme.Warn}]{T("atualizando...", "updating...")}[/]" : $"[{Theme.Clock}]{snap.FetchedAt:HH:mm:ss}[/]";
         if (state.Error is { } e) status += $" [{Theme.Bad}]({Markup.Escape(e)})[/]";
         if (snap.ResetDate is { } reset)
@@ -518,13 +521,6 @@ static class Dashboard
         {
             AddWindow(t, "5h", state.FiveHour, colWidth, state.Month is null);
             AddWindow(t, "7d", state.SevenDay, colWidth, state.Month is null);
-            if (state.QuotaCapturedAt is { } at)
-            {
-                var age = DateTime.Now - at;
-                var color = age > TimeSpan.FromMinutes(10) ? Theme.Warn : Theme.Clock;
-                t.AddRow(Label(T("Atualizado", "Updated")), $"[{color}]{T($"há {Elapsed(age)}", $"{Elapsed(age)} ago")}[/]"
-                    + (state.CheckedAt is { } read ? $"   [{Theme.Unit}]{T("lido", "read")} {read:HH:mm:ss}[/]" : ""));
-            }
         }
 
         t.AddEmptyRow();
@@ -543,6 +539,16 @@ static class Dashboard
             var usdText = !unpriced ? $"US$ {month.Usd:F2}" : month.Usd > 0 ? $"US$ {month.Usd:F2}+{Unavailable()}" : $"US$ {Unavailable()}";
             t.AddRow(Label(T("Este mês", "This month")), $"[bold]{Tokens(month.Total)}[/]   [bold {Theme.Spent}]~{usdText}[/]   [{Theme.Unit}]{T("neste PC", "this PC")}[/]");
             t.AddRow("", TokenBreakdown(month.Input, month.Output, month.CacheRead + month.CacheWrite));
+        }
+
+        // Vale para o painel todo: fica por ultimo e separado do resto.
+        if ((state.FiveHour is not null || state.SevenDay is not null) && state.QuotaCapturedAt is { } at)
+        {
+            var age = DateTime.Now - at;
+            var color = age > TimeSpan.FromMinutes(10) ? Theme.Warn : Theme.Clock;
+            t.AddEmptyRow();
+            t.AddRow(Label(T("Atualizado", "Updated")), $"[{color}]{T($"há {Elapsed(age)}", $"{Elapsed(age)} ago")}[/]"
+                + (state.CheckedAt is { } read ? $"   [{Theme.Unit}]{T("lido", "read")} {read:HH:mm:ss}[/]" : ""));
         }
 
         return Styled(t, "Claude", Theme.Claude, Icons.Claude);
