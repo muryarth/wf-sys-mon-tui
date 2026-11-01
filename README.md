@@ -82,7 +82,7 @@ As temperaturas gerais do CPU e da GPU também ficam no topo da tela. Os valores
 - **Permissão de administrador uma vez**, para instalar o serviço de sensores. Depois, o app abre sem pedir nada. Sem o serviço, ele roda em modo limitado.
 - Uma conta do GitHub com Copilot, apenas para o painel do Copilot.
 
-Nada é instalado sem você confirmar. Se faltar o .NET 10, sem o qual o app não abre, o inicializador explica e pergunta antes de instalar pelo winget. O GitHub CLI é opcional, usado no painel do Copilot e nas atualizações: a aba Contas oferece a instalação. O driver PawnIO é oferecido no `-Install` e na aba Contas.
+Nada é instalado sem você confirmar: o inicializador mostra em uma única tela tudo o que falta e pede uma só confirmação. Sem o .NET 10 o app não abre. O GitHub CLI, usado no painel do Copilot e nas atualizações, e o driver PawnIO entram pelo `-Install` ou pela aba Contas.
 
 ## Instalação
 
@@ -102,12 +102,15 @@ cd wf-sys-mon-tui
 
 O `-Install`:
 
-1. Se faltar o .NET 10 (Runtime no pacote da release; SDK no código-fonte), pergunta e instala via winget.
+Mostra em uma tela o que será feito, pede uma única confirmação e então:
+
+1. Instala via winget o que faltar: .NET 10 (Runtime no pacote da release; SDK no código-fonte), GitHub CLI e PawnIO.
 2. A partir do código-fonte, compila o app em `out\`.
 3. Cria o atalho `%USERPROFILE%\bin\wf-sys-mon.cmd` e adiciona essa pasta ao `PATH` do usuário.
 4. Configura a status line do Claude Code em `~/.claude/settings.json`, sem sobrescrever uma que já exista.
-5. Oferece instalar o driver PawnIO, usado para ler os sensores.
-6. Instala o serviço de sensores. O Windows confirma pelo UAC, só desta vez.
+5. Instala o serviço de sensores.
+
+O Windows pode pedir o UAC para o serviço e para cada programa que precisar de administrador. Se escolher sair, nada é alterado.
 
 Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
