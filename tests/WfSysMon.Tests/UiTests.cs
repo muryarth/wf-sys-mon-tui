@@ -125,7 +125,7 @@ public class UiTests
         var half = a1.Build(Data(), 143, 58);
         Check("meia tela: colunas iguais", half.Columns.Count == 2 && half.Columns[0].W == half.Columns[1].W, $"{half.Columns[0].W}");
         var vert = a1.Build(Data(), 90, 81);
-        Check("vertical: coluna unica usa toda a largura", vert.Columns.Count == 1 && vert.Columns[0].X == 0 && vert.Columns[0].W == 90);
+        Check("vertical: coluna unica usa a largura, menos a ultima celula", vert.Columns.Count == 1 && vert.Columns[0].X == 0 && vert.Columns[0].W == 89);
         Check("IsVertical", TuiApp.IsVertical(90, 81) && !TuiApp.IsVertical(286, 58) && !TuiApp.IsVertical(143, 58));
         var linhaDaBarra = Dump(vert).Split('\n').First(l => l.Contains("Total load") || l.Contains("Uso total"));
         Check("coluna unica: barra estica", linhaDaBarra.Count(c => c is '\u2501' or '\u2500' or '\u2578') >= 60, linhaDaBarra.Trim());
@@ -202,7 +202,7 @@ public class UiTests
             var aic = linhasAic.Select(Celula).Where(l => l.Contains(" AIC ")).ToList();
             var fins = aic.Select(l => l.LastIndexOf("AIC")).Distinct().ToList();
             var barra = linhasAic.Select(Celula).FirstOrDefault(l => l.Contains("98%"));
-            Check($"{w0}x{h0}: AIC nas 3 categorias, alinhado", aic.Count == 3 && fins.Count == 1 && aic.All(l => l.Contains("/")), string.Join(",", fins));
+            Check($"{w0}x{h0}: AIC nas 2 categorias, alinhado", aic.Count == 2 && fins.Count == 1 && aic.All(l => l.Contains("/")), string.Join(",", fins));
             Check($"{w0}x{h0}: AIC na mesma ponta da barra", barra is null || barra.IndexOf("98%") + 3 == aic[0].LastIndexOf("AIC") + 4, $"{barra?.IndexOf("98%") + 3}/{aic[0].LastIndexOf("AIC") + 4}");
         }
         var semAic = Dump(a2.Build(Data(), 286, 58)).Split('\n');
@@ -270,13 +270,13 @@ public class UiTests
         a9.Build(Data(), 286, 58);
         a9.Handle(new KeyInput(ConsoleKey.RightArrow, '\0'));
         var aba = a9.Build(Data(), 286, 58);
-        Check("seta direita abre Contas", Dump(aba).Contains("Serviço de sensores") && aba.Columns.Count == 0);
+        Check("seta direita abre Contas", Dump(aba).Contains("Claude Code") && aba.Columns.Count == 0);
         a9.Handle(new KeyInput(ConsoleKey.LeftArrow, '\0'));
         Check("seta esquerda volta", a9.Build(Data(), 286, 58).Columns.Count == 2);
         aba = a9.Build(Data(), 286, 58);
         var abaContas = aba.Regions.First(r => r.Y == 0 && Dump(aba).Split('\n')[0].Substring(r.X, r.W).Contains("Contas"));
         a9.Handle(new MouseInput(abaContas.X + 1, 0, true, 0));
-        Check("clique na aba Contas", Dump(a9.Build(Data(), 286, 58)).Contains("Serviço de sensores"));
+        Check("clique na aba Contas", Dump(a9.Build(Data(), 286, 58)).Contains("Claude Code"));
         a9.Handle(new KeyInput(ConsoleKey.Escape, '\u001b'));
         Check("Esc em Contas volta ao Monitoramento", a9.Build(Data(), 286, 58).Columns.Count == 2);
 
@@ -295,7 +295,7 @@ public class UiTests
         aba = a9.Build(Data(), 286, 58);
         Check("esquerda na primeira aba vai para Ajustes", Dump(aba).Contains("Atualização do hardware"));
         a9.Handle(new KeyInput(ConsoleKey.LeftArrow, '\0'));
-        Check("esquerda chega em Contas", Dump(a9.Build(Data(), 286, 58)).Contains("Serviço de sensores"));
+        Check("esquerda chega em Contas", Dump(a9.Build(Data(), 286, 58)).Contains("Claude Code"));
         a9.Handle(new KeyInput(ConsoleKey.S, 's'));
         aba = a9.Build(Data(), 286, 58);
         Check("S abre Ajustes", Dump(aba).Contains("Atualização do hardware"));
@@ -312,11 +312,8 @@ public class UiTests
         a4.Handle(new KeyInput(ConsoleKey.A, 'a'));
         Check("abrir contas verifica o Claude", log4.Contains("check"));
         f = a4.Build(Data(admin: false, needsLogin: true, claudeLogged: false), 90, 81);
-        Check("contas mostra pendencias", Dump(f).Contains("Modo limitado") && Dump(f).Contains("Não conectado"));
-        a4.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
-        Check("Enter no primeiro item instala o servico", log4.Contains("install-service"));
-        a4.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
-        a4.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+        Check("contas mostra pendencias", Dump(f).Contains("Não conectado") && !Dump(f).Contains("Modo limitado") && !Dump(f).Contains("Serviço de sensores"));
+        Check("pendencias separadas por aba", Dump(f).Split('\n')[0].Contains("Contas (2)") && Dump(f).Split('\n')[0].Contains("Ajustes (1)"), Dump(f).Split('\n')[0].Trim());
         a4.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         Check("item GitHub inicia login", log4.Contains("github"));
         a4.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
@@ -329,9 +326,7 @@ public class UiTests
         a10.Build(Data(), 90, 81);
         a10.Handle(new KeyInput(ConsoleKey.A, 'a'));
         f = a10.Build(Data(), 90, 81);
-        a10.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
         Check("acao so na linha selecionada", !Dump(f).Contains("Sair     ") || Dump(f).Split('\n').Count(l => l.Contains("Enter")) <= 1);
-        a10.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
         f = a10.Build(Data(), 90, 81);
         var linhaGh = Dump(f).Split('\n').First(l => l.Contains("GitHub Copilot"));
         Check("seta seleciona a conta e mostra Sair", linhaGh.Contains(">") && linhaGh.Contains("Enter") && linhaGh.Contains("Sair"), linhaGh.Trim());
@@ -351,7 +346,7 @@ public class UiTests
         a11.Build(Data(), 90, 81);
         a11.Handle(new KeyInput(ConsoleKey.A, 'a'));
         a11.Build(Data(), 90, 81);
-        a11.Handle(new KeyInput(ConsoleKey.DownArrow, '\0')); a11.Handle(new KeyInput(ConsoleKey.DownArrow, '\0')); a11.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+        a11.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
         a11.Build(Data(), 90, 81);
         a11.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         a11.Build(Data(), 90, 81);
@@ -360,12 +355,25 @@ public class UiTests
         Check("sair do Claude mostra falha", log11.Contains("logout-claude") && Dump(f).Contains("erro de teste"));
 
         // Servico de sensores
+        void AteServico(TuiApp app, UiData dados)
+        {
+            app.Build(dados, 90, 81);
+            app.Handle(new KeyInput(ConsoleKey.S, 's'));
+            app.Build(dados, 90, 81);
+            for (var i = 0; i < 6; i++) app.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+        }
+
+        var (a40, log40) = NewApp();
+        AteServico(a40, Data(admin: false));
+        a40.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+        Check("Enter na linha do servico instala", log40.Contains("install-service"));
+
         var (a22, log22) = NewApp();
-        a22.Build(Data(), 90, 81);
-        a22.Handle(new KeyInput(ConsoleKey.A, 'a'));
+        AteServico(a22, Data());
         f = a22.Build(Data(), 90, 81);
         Check("servico ativo aparece, com opcao de remover", Dump(f).Contains("Serviço de sensores") && Dump(f).Contains("Ativo") && Dump(f).Contains("Remover"));
-        Check("sem pendencia com o servico", !Dump(f).Split('\n')[0].Contains("Contas ("));
+        Check("sem pendencia com o servico", !Dump(f).Split('\n')[0].Contains("Ajustes ("));
+        Check("status line nos ajustes, com nome claro", Dump(f).Contains("Status line do Claude Code") && !Dump(f).Contains("Cota do Claude"));
         a22.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         f = a22.Build(Data(), 90, 81);
         Check("remover pede confirmacao", Dump(f).Contains("Remove o serviço") && !log22.Contains("remove-service"));
@@ -376,9 +384,9 @@ public class UiTests
             var (am, _) = NewApp();
             var dm = Data() with { Mode = mode };
             am.Build(dm, 90, 81);
-            am.Handle(new KeyInput(ConsoleKey.A, 'a'));
+            am.Handle(new KeyInput(ConsoleKey.S, 's'));
             f = am.Build(dm, 90, 81);
-            Check($"{mode}: mostra e conta como pendencia", Dump(f).Contains(texto) && Dump(f).Split('\n')[0].Contains("Contas (1)"));
+            Check($"{mode}: mostra e conta como pendencia", Dump(f).Contains(texto) && Dump(f).Split('\n')[0].Contains("Ajustes (1)"));
         }
         var (a23, _) = NewApp();
         var vazio = Data() with { Hardware = [] };
@@ -411,7 +419,7 @@ public class UiTests
         };
         var (a25, _) = NewApp();
         var telaInicio = Dump(a25.Build(inicio, 143, 58));
-        Check("Copilot mostra a estrutura", new[] { "Gasto", "Cota plano", "Extra budget", "Restante", "Tokens" }.All(telaInicio.Contains));
+        Check("Copilot mostra a estrutura", new[] { "Cota plano", "Extra budget", "Restante", "Tokens" }.All(telaInicio.Contains));
         Check("Copilot e Claude mostram carregando", telaInicio.Split('\n').Count(l => l.Contains("carregando")) >= 3, "");
         Check("sem ? enquanto carrega", !telaInicio.Contains(" ? ") && !telaInicio.Contains("~?"));
         Check("IsLoading detecta dados pendentes", Dashboard.IsLoading(inicio.Hardware, inicio.Copilot, inicio.Claude));
@@ -448,11 +456,11 @@ public class UiTests
         var (a16, log16) = NewApp();
         var semDriver = Data() with { DriverInstalled = false };
         a16.Build(semDriver, 90, 81);
-        a16.Handle(new KeyInput(ConsoleKey.A, 'a'));
+        a16.Handle(new KeyInput(ConsoleKey.S, 's'));
         f = a16.Build(semDriver, 90, 81);
         Check("sem driver: aba mostra o estado", Dump(f).Contains("PawnIO não instalado") && Dump(f).Contains("temperatura e potência"));
-        Check("sem driver: conta como pendencia", Dump(f).Split('\n')[0].Contains("Contas (1)"), Dump(f).Split('\n')[0].Trim());
-        a16.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+        Check("sem driver: conta como pendencia", Dump(f).Split('\n')[0].Contains("Ajustes (1)"), Dump(f).Split('\n')[0].Trim());
+        for (var i = 0; i < 7; i++) a16.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
         a16.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         f = a16.Build(semDriver, 90, 81);
         Check("instalar pede confirmacao", Dump(f).Contains("namazso.PawnIO") && !log16.Contains("driver"));
@@ -466,8 +474,8 @@ public class UiTests
         Check("confirmar instala e pede para reabrir", log16.Contains("driver") && Dump(f).Contains("reabra o app"));
         var (a17, _) = NewApp();
         a17.Build(Data(), 90, 81);
-        a17.Handle(new KeyInput(ConsoleKey.A, 'a'));
-        Check("com driver: sem pendencia", !Dump(a17.Build(Data(), 90, 81)).Split('\n')[0].Contains("Contas ("));
+        a17.Handle(new KeyInput(ConsoleKey.S, 's'));
+        Check("com driver: sem pendencia", !Dump(a17.Build(Data(), 90, 81)).Split('\n')[0].Contains("Ajustes ("));
 
         // GitHub CLI ausente: confirma antes de instalar
         HasGh = false;
@@ -476,7 +484,6 @@ public class UiTests
         a18.Build(semLogin, 90, 81);
         a18.Handle(new KeyInput(ConsoleKey.A, 'a'));
         a18.Build(semLogin, 90, 81);
-        a18.Handle(new KeyInput(ConsoleKey.DownArrow, '\0')); a18.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
         a18.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         f = a18.Build(semLogin, 90, 81);
         Check("sem gh: pede confirmacao", Dump(f).Contains("GitHub.cli") && !log18.Contains("github"));
@@ -547,7 +554,6 @@ public class UiTests
         a12.Handle(new KeyInput(ConsoleKey.A, 'a'));
         f = a12.Build(Data(admin: false), 90, 81);
         var linhas2 = Dump(f).Split('\n');
-        var yAdm = Array.FindIndex(linhas2, l => l.Contains("Modo limitado"));
         var yCl = Array.FindIndex(linhas2, l => l.Contains("Claude Code"));
         a12.Handle(new MouseInput(5, yCl, true, 0));
         f = a12.Build(Data(admin: false), 90, 81);
@@ -607,6 +613,104 @@ public class UiTests
         a15.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         Check("Enter volta para portugues", settings.Language == "pt");
         settings.Icons = true;
+
+        // Copilot sem a linha de gasto; login concluido nao fica preso
+        var telaCopilot = Dump(a2.Build(Data(), 286, 58));
+        Check("sem a linha Gasto", !telaCopilot.Contains("Gasto") && telaCopilot.Contains("Cota plano") && telaCopilot.Contains("Restante"));
+        Check("login concluido some quando os dados chegam", Dashboard.LoginSteps(Data().Copilot, new AuthState(AuthStep.Done)).Count == 0);
+        var aguardando = Data().Copilot with { Snapshot = null };
+        Check("login concluido avisa enquanto carrega", Dashboard.LoginSteps(aguardando, new AuthState(AuthStep.Done)).Count == 1);
+
+        // Tokens da cota na ponta direita, alinhados com o percentual da barra
+        foreach (var (w3, h3) in new[] { (286, 58), (143, 58), (90, 81), (70, 90) })
+        {
+            var (ac, _) = NewApp();
+            var linhas3 = Dump(ac.Build(Data(), w3, h3)).Split('\n');
+            foreach (var rotulo in new[] { "│ 5h ", "│ 7d " })
+            {
+                var i = Array.FindIndex(linhas3, l => l.Contains(rotulo));
+                var fimBarra = linhas3[i].LastIndexOf('%') + 1;
+                var fimTokens = linhas3[i + 1].LastIndexOf("tokens") + "tokens".Length;
+                Check($"{w3}x{h3} {rotulo}: tokens alinhados com o percentual", fimBarra > 0 && fimBarra == fimTokens, $"{fimBarra}/{fimTokens}");
+            }
+        }
+
+        // "Atualizado" por ultimo e separado, nos dois paineis
+        var (a42, _) = NewApp();
+        var linhas42 = Dump(a42.Build(Data(), 90, 81)).Split('\n');
+        bool Vazia(string l) => l.Replace("│", "").Replace("┃", "").Trim().Length == 0;
+        var atCopilot = Array.FindIndex(linhas42, l => l.Contains("Atualizado"));
+        var atClaude = Array.FindLastIndex(linhas42, l => l.Contains("Atualizado"));
+        var tokensCopilot = Array.FindIndex(linhas42, l => l.Contains("Tokens"));
+        var mesClaude = Array.FindIndex(linhas42, l => l.Contains("Este mês"));
+        Check("Copilot: atualizado depois dos tokens, separado", atCopilot > tokensCopilot && Vazia(linhas42[atCopilot - 1]) && linhas42[atCopilot + 1].Contains('╰'));
+        Check("Claude: atualizado depois do mes, separado", atClaude > mesClaude && Vazia(linhas42[atClaude - 1]) && linhas42[atClaude + 1].Contains('╰'));
+
+        // R avisa o que esta atualizando
+        var (a41, log41) = NewApp();
+        a41.Build(Data(), 286, 58);
+        a41.Handle(new KeyInput(ConsoleKey.R, 'r'));
+        Check("R atualiza e avisa", log41.Contains("refresh") && Dump(a41.Build(Data(), 286, 58)).Contains("Atualizando"));
+
+        // A barra de rolagem nunca cai na ultima celula, onde o fim de linha do desenho a apagaria
+        foreach (var (lb, ab) in new[] { (90, 20), (120, 30), (143, 20), (144, 20), (127, 20), (128, 20), (286, 20), (70, 20) })
+        {
+            var (asb, _) = NewApp();
+            var qb = asb.Build(Data(), lb, ab);
+            Check($"{lb}x{ab}: nenhuma coluna toca a ultima celula", qb.Columns.All(c => c.X + c.W < lb), string.Join(",", qb.Columns.Select(c => c.X + c.W)));
+            var cb = qb.Columns[^1];
+            var linhasB = Dump(qb).Split('\n');
+            Check($"{lb}x{ab}: barra de rolagem aparece", cb.ContentHeight > cb.H && linhasB.Skip(cb.Y).Take(cb.H).Count(l => l.Length > cb.X + cb.W - 1 && l[cb.X + cb.W - 1] is '┃' or '│') == cb.H);
+        }
+
+        // Mostrar ou ocultar agentes
+        Check("agentes visiveis por padrao", new Settings().ShowCopilot && new Settings().ShowClaude);
+        var semChaves = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"Language\":\"pt\"}")!;
+        Check("preferencia antiga continua mostrando os agentes", semChaves.ShowCopilot && semChaves.ShowClaude);
+
+        var (a50, _) = NewApp();
+        a50.Build(Data(), 90, 81);
+        a50.Handle(new KeyInput(ConsoleKey.S, 's'));
+        var telaAjustes = Dump(a50.Build(Data(), 90, 81));
+        Check("ajustes listam os dois agentes", telaAjustes.Contains("Painel do Copilot") && telaAjustes.Contains("Painel do Claude") && telaAjustes.Contains("Ocultar"));
+        for (var i = 0; i < 4; i++) a50.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+        a50.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+        Check("Enter oculta o Copilot", !settings.ShowCopilot && settings.ShowClaude);
+        Check("mudar agentes limpa a tela", a50.TakeClearRequest());
+
+        foreach (var (lg, al) in new[] { (286, 58), (143, 58), (90, 81), (70, 90) })
+        {
+            var (ag, _) = NewApp();
+            var soClaude = Dump(ag.Build(Data(), lg, al));
+            Check($"{lg}x{al}: so o Claude", soClaude.Contains("INTELIG") && soClaude.Contains("│ 5h ") && !soClaude.Contains("GitHub Copilot") && !soClaude.Contains("AIC"));
+        }
+
+        settings.ShowCopilot = true;
+        settings.ShowClaude = false;
+        var (a51, _) = NewApp();
+        var soCopilot = Dump(a51.Build(Data(), 286, 58));
+        Check("so o Copilot", soCopilot.Contains("INTELIG") && soCopilot.Contains("GitHub Copilot") && !soCopilot.Contains("│ 5h "));
+
+        settings.ShowCopilot = false;
+        foreach (var (lg, al, largura) in new[] { (286, 58, 110), (143, 58, 110), (90, 81, 89), (70, 90, 69) })
+        {
+            var (ag, _) = NewApp();
+            var quadro = ag.Build(Data(), lg, al);
+            var tela = Dump(quadro);
+            Check($"{lg}x{al}: todos ocultos, a secao some", !tela.Contains("INTELIG") && !tela.Contains("│ 5h ") && !tela.Contains("GitHub Copilot") && tela.Contains("HARDWARE"));
+            Check($"{lg}x{al}: hardware sozinho e centralizado", quadro.Columns.Count == 1 && quadro.Columns[0].W == largura && Math.Abs(quadro.Columns[0].X - (lg - largura) / 2) <= 1, $"x={quadro.Columns[0].X} w={quadro.Columns[0].W}");
+        }
+        var (a52, _) = NewApp();
+        var tudoFaltando = Data(needsLogin: true, claudeLogged: false);
+        a52.Build(tudoFaltando, 286, 58);
+        Check("agente oculto nao cobra pendencia", !Dump(a52.Build(tudoFaltando, 286, 58)).Split('\n')[0].Contains("Contas ("));
+        var pendente = Data();
+        pendente = pendente with { Copilot = pendente.Copilot with { Snapshot = null, Error = null, NeedsLogin = false }, Claude = pendente.Claude with { AccountChecked = false, Month = null } };
+        Check("agente oculto nao mantem o indicador girando", !Dashboard.IsLoading(pendente.Hardware, pendente.Copilot, pendente.Claude));
+        var recolhida = settings.AiCollapsed;
+        a52.Handle(new KeyInput(ConsoleKey.D2, '2'));
+        Check("tecla 2 nao faz nada sem a secao", settings.AiCollapsed == recolhida);
+        settings.ShowCopilot = settings.ShowClaude = true;
 
         // Atualizacoes
         var (a30, log30) = NewApp();

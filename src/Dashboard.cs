@@ -116,12 +116,12 @@ static class Dashboard
         var t = Kv();
         t.AddRow(Label(T("Plano", "Plan")), Loading());
         t.AddRow(Label(T("Consumo", "Usage")), FadedBar(colWidth));
-        t.AddRow(Label(T("Gasto", "Spent")), Faded);
         t.AddRow(Label(T("Cota plano", "Plan quota")), Faded);
         t.AddRow(Label("Extra budget"), Faded);
         t.AddRow(Label(T("Restante", "Left")), Faded);
         t.AddEmptyRow();
         t.AddRow(Label("Tokens"), Faded);
+        t.AddEmptyRow();
         t.AddRow(Label(T("Atualizado", "Updated")), Faded);
         return Styled(t, "GitHub Copilot", Theme.Copilot, Icons.Copilot);
     }
@@ -129,9 +129,8 @@ static class Dashboard
     // Algum painel ainda esta esperando dados: o indicador precisa continuar girando.
     public static bool IsLoading(IReadOnlyList<IHardware> hardware, CopilotState copilot, ClaudeState claude) =>
         hardware.Count == 0
-        || (copilot.Snapshot is null && !copilot.NeedsLogin && copilot.Error is null)
-        || !claude.AccountChecked
-        || claude.Month is null;
+        || (Settings.Current.ShowCopilot && copilot.Snapshot is null && !copilot.NeedsLogin && copilot.Error is null)
+        || (Settings.Current.ShowClaude && (!claude.AccountChecked || claude.Month is null));
 
     public static List<Panel> HardwarePanels(IReadOnlyList<IHardware> hardware, int colWidth)
     {
@@ -161,7 +160,10 @@ static class Dashboard
     }
 
     public static List<Panel> AiPanels(CopilotState copilot, ClaudeState claude, AuthState auth, int colWidth) =>
-        [CopilotPanel(copilot, auth, colWidth), ClaudePanel(claude, colWidth)];
+        [
+            .. Settings.Current.ShowCopilot ? [CopilotPanel(copilot, auth, colWidth)] : Array.Empty<Panel>(),
+            .. Settings.Current.ShowClaude ? [ClaudePanel(claude, colWidth)] : Array.Empty<Panel>(),
+        ];
 
     // ---------------------------------------------------------------- CPU
 
@@ -387,9 +389,9 @@ static class Dashboard
         {
             t.AddRow(Label(T("Consumo", "Usage")), LoadBar(usedPct, ValueBar(colWidth)));
             // O valor em AIC fica na ponta direita de cada categoria; cobranca legada nao usa creditos.
-            string Row(double used, double limit, bool strong, bool showLimit = true)
+            string Row(double used, double limit, bool showLimit = true)
             {
-                var money = $"[{(strong ? $"bold {band}" : band)}]US$ {used * usdPerUnit:F2}[/]";
+                var money = $"[{band}]US$ {used * usdPerUnit:F2}[/]";
                 if (showLimit) money += $" [{Theme.Unit}]/ {limit * usdPerUnit:F2}[/]";
                 if (!snap.TokenBasedBilling) return money;
 
@@ -399,12 +401,11 @@ static class Dashboard
 
             var extraUsed = Math.Max(0, snap.Used - snap.Entitlement);
             var planUsed = snap.Used - extraUsed;
-            t.AddRow(Label(T("Gasto", "Spent")), Row(snap.Used, total, strong: true));
-            t.AddRow(Label(T("Cota plano", "Plan quota")), Row(planUsed, snap.Entitlement, strong: false));
+            t.AddRow(Label(T("Cota plano", "Plan quota")), Row(planUsed, snap.Entitlement));
             if (snap.ExtraBudget > 0)
-                t.AddRow(Label("Extra budget"), Row(extraUsed, snap.ExtraBudget, strong: false));
+                t.AddRow(Label("Extra budget"), Row(extraUsed, snap.ExtraBudget));
             else if (extraUsed > 0)
-                t.AddRow(Label("Extra budget"), Row(extraUsed, 0, strong: false, showLimit: false));
+                t.AddRow(Label("Extra budget"), Row(extraUsed, 0, showLimit: false));
             t.AddRow(Label(T("Restante", "Left")), $"[bold {band}]US$ {remaining * usdPerUnit:F2}[/]");
         }
 
@@ -431,6 +432,8 @@ static class Dashboard
             t.AddRow(Label("Tokens"), Unavailable());
         }
 
+        // Vale para o painel todo: fica por ultimo e separado do resto.
+        t.AddEmptyRow();
         var status = state.Loading ? $"[{Theme.Warn}]{T("atualizando...", "updating...")}[/]" : $"[{Theme.Clock}]{snap.FetchedAt:HH:mm:ss}[/]";
         if (state.Error is { } e) status += $" [{Theme.Bad}]({Markup.Escape(e)})[/]";
         if (snap.ResetDate is { } reset)
@@ -462,7 +465,7 @@ static class Dashboard
                     $"[{Theme.Warn}]{T("aguardando autorização...", "waiting for authorization...")}[/]",
                 ];
 
-            case AuthStep.Done:
+            case AuthStep.Done when state.Snapshot is null && state.Error is null:
                 return [$"[bold {Theme.Good}]{T("conectado!", "connected!")}[/] [{Theme.Warn}]{T("carregando dados do Copilot...", "loading Copilot data...")}[/]"];
 
             case AuthStep.Failed:
@@ -505,26 +508,19 @@ static class Dashboard
 
         if (state.FiveHour is null && state.SevenDay is null && state.Month is null)
         {
-            t.AddRow(Label(T("Cota 5h", "5h quota")), FadedBar(colWidth));
-            t.AddRow(Label(T("Cota 7 dias", "7-day quota")), FadedBar(colWidth));
+            t.AddRow(Label("5h"), FadedBar(colWidth));
+            t.AddRow(Label("7d"), FadedBar(colWidth));
         }
         else if (state.FiveHour is null && state.SevenDay is null)
         {
             t.AddRow(Label(T("Cota", "Quota")), state.HasQuotaFiles
                 ? $"[{Theme.Warn}]{T("sem dado recente", "no recent data")}[/]"
-                : $"[{Theme.Warn}]{T("sem dados", "no data")}[/]  {Key("A")}");
+                : $"[{Theme.Warn}]{T("sem dados", "no data")}[/]  {Key("S")}");
         }
         else
         {
-            AddWindow(t, T("Cota 5h", "5h quota"), state.FiveHour, colWidth, state.Month is null);
-            AddWindow(t, T("Cota 7 dias", "7-day quota"), state.SevenDay, colWidth, state.Month is null);
-            if (state.QuotaCapturedAt is { } at)
-            {
-                var age = DateTime.Now - at;
-                var color = age > TimeSpan.FromMinutes(10) ? Theme.Warn : Theme.Clock;
-                t.AddRow(Label(T("Atualizado", "Updated")), $"[{color}]{T($"há {Elapsed(age)}", $"{Elapsed(age)} ago")}[/]"
-                    + (state.CheckedAt is { } read ? $"   [{Theme.Unit}]{T("lido", "read")} {read:HH:mm:ss}[/]" : ""));
-            }
+            AddWindow(t, "5h", state.FiveHour, colWidth, state.Month is null);
+            AddWindow(t, "7d", state.SevenDay, colWidth, state.Month is null);
         }
 
         t.AddEmptyRow();
@@ -543,6 +539,16 @@ static class Dashboard
             var usdText = !unpriced ? $"US$ {month.Usd:F2}" : month.Usd > 0 ? $"US$ {month.Usd:F2}+{Unavailable()}" : $"US$ {Unavailable()}";
             t.AddRow(Label(T("Este mês", "This month")), $"[bold]{Tokens(month.Total)}[/]   [bold {Theme.Spent}]~{usdText}[/]   [{Theme.Unit}]{T("neste PC", "this PC")}[/]");
             t.AddRow("", TokenBreakdown(month.Input, month.Output, month.CacheRead + month.CacheWrite));
+        }
+
+        // Vale para o painel todo: fica por ultimo e separado do resto.
+        if ((state.FiveHour is not null || state.SevenDay is not null) && state.QuotaCapturedAt is { } at)
+        {
+            var age = DateTime.Now - at;
+            var color = age > TimeSpan.FromMinutes(10) ? Theme.Warn : Theme.Clock;
+            t.AddEmptyRow();
+            t.AddRow(Label(T("Atualizado", "Updated")), $"[{color}]{T($"há {Elapsed(age)}", $"{Elapsed(age)} ago")}[/]"
+                + (state.CheckedAt is { } read ? $"   [{Theme.Unit}]{T("lido", "read")} {read:HH:mm:ss}[/]" : ""));
         }
 
         return Styled(t, "Claude", Theme.Claude, Icons.Claude);
@@ -586,7 +592,10 @@ static class Dashboard
         }
 
         t.AddRow(Label(label), LoadBar((float)window.UsedPercent, ValueBar(colWidth)));
-        t.AddRow("", $"[{Theme.Unit}]{T("renova em", "resets in")}[/] {Elapsed(window.ResetsAt - DateTime.Now)}   {(logsLoading ? Loading("tokens") : QuotaEstimate(window))}");
+        t.AddRow("", WithRightBadge(
+            $"[{Theme.Unit}]{T("renova em", "resets in")}[/] {Elapsed(window.ResetsAt - DateTime.Now)}",
+            logsLoading ? Loading("tokens") : QuotaEstimate(window),
+            colWidth));
     }
 
     // Quanto ainda cabe na janela, pela proporcao entre o percentual e o uso deste PC na mesma janela.

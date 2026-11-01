@@ -13,7 +13,7 @@ static class Program
     const string RequestInstallArgument = "--request-service-install";
     const string RequestUninstallArgument = "--request-service-uninstall";
 
-    static readonly TimeSpan AnimationInterval = TimeSpan.FromMilliseconds(80);
+    static readonly TimeSpan AnimationInterval = TimeSpan.FromMilliseconds(40);
 
     // Tempo para ler o resultado antes de reabrir; um aviso sobre o servico precisa de mais.
     static readonly TimeSpan ReopenDelay = TimeSpan.FromSeconds(1.5);

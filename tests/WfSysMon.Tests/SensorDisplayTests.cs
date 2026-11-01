@@ -29,30 +29,95 @@ public class SensorDisplayTests
         Assert.Equal((50 + 70 + 80) / 3f, SensorDisplay.Get("t"));
     }
 
-    [Fact]
-    public void BarEasesOutWithoutOvershootingAndStops()
+    // Leva a barra a 60 e muda o alvo para 10. Devolve a posicao a cada quadro ate parar.
+    static List<float> MoveBar(double frameSeconds)
     {
-        SensorDisplay.Add("t", 60); SensorDisplay.Publish();
+        SensorDisplay.Reset();
+        SensorDisplay.Add("t", 60); SensorDisplay.Add("t", 60); SensorDisplay.Add("t", 60); SensorDisplay.Publish();
         SensorDisplay.TrackBar("t");
-
-        Assert.True(SensorDisplay.Animate(0.08));
-        var start = SensorDisplay.GetBar("t")!.Value;
-        Assert.Equal(SensorDisplay.Get("t"), start);
-        Assert.False(SensorDisplay.Animate(0.08));
+        SensorDisplay.Animate(frameSeconds);
+        Assert.False(SensorDisplay.Animate(frameSeconds));
 
         SensorDisplay.Add("t", 10); SensorDisplay.Add("t", 10); SensorDisplay.Add("t", 10);
-        SensorDisplay.Publish(); SensorDisplay.Publish();
-        var target = SensorDisplay.Get("t")!.Value;
-        Assert.Equal(10, target);
+        for (var i = 0; i < Settings.Current.DisplaySeconds; i++) SensorDisplay.Publish();
+        Assert.Equal(10, SensorDisplay.Get("t"));
 
-        var steps = new List<float>();
-        while (SensorDisplay.Animate(0.08) && steps.Count < 100)
+        List<float> steps = [60];
+        while (SensorDisplay.Animate(frameSeconds) && steps.Count < 1000)
             steps.Add(SensorDisplay.GetBar("t")!.Value);
+        return steps;
+    }
 
-        Assert.True(steps.Zip(steps.Skip(1)).All(p => p.Second <= p.First) && steps.All(v => v >= target));
-        Assert.True(start - steps[0] > steps[0] - steps[1]);
-        Assert.Equal(target, steps[^1]);
-        Assert.True(steps.Count < 40);
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    public void BarAcceleratesSlowsDownAndArrivesBeforeTheNextReading(int interval)
+    {
+        Settings.Current.DisplaySeconds = interval;
+        const double frame = 0.04;
+        var steps = MoveBar(frame);
+
+        Assert.Equal(10, steps[^1]);
+        Assert.True(steps.Zip(steps.Skip(1)).All(p => p.Second <= p.First));
+        Assert.True(steps.All(v => v >= 10));
+
+        var speeds = steps.Zip(steps.Skip(1)).Select(p => p.First - p.Second).ToList();
+        var fastest = speeds.IndexOf(speeds.Max());
+        Assert.True(fastest > 0, "precisa acelerar no inicio");
+        Assert.True(fastest < speeds.Count / 2, "precisa desacelerar por mais tempo");
+        Assert.True(speeds[^1] < speeds[fastest] / 3, "precisa chegar devagar");
+
+        var seconds = speeds.Count * frame;
+        Assert.True(seconds < interval, $"levou {seconds:F2} s para um intervalo de {interval} s");
+        Assert.True(seconds > interval * 0.35, $"{seconds:F2} s e rapido demais para um intervalo de {interval} s");
+    }
+
+    [Fact]
+    public void LongerIntervalsMoveMoreSlowly()
+    {
+        var times = Settings.DisplayOptions.Select(interval =>
+        {
+            Settings.Current.DisplaySeconds = interval;
+            return MoveBar(0.04).Count;
+        }).ToList();
+
+        Assert.True(times[0] < times[1] && times[1] < times[2], string.Join(" < ", times));
+    }
+
+    [Fact]
+    public void MotionDoesNotDependOnFrameRate()
+    {
+        var fine = MoveBar(0.02);
+        var coarse = MoveBar(0.08);
+
+        // O mesmo instante nas duas taxas: 0,4 s
+        Assert.Equal(fine[20], coarse[5], 0.01f);
+    }
+
+    [Fact]
+    public void TargetChangeMidwayHasNoJump()
+    {
+        SensorDisplay.Add("t", 50); SensorDisplay.Add("t", 50); SensorDisplay.Add("t", 50); SensorDisplay.Publish();
+        SensorDisplay.TrackBar("t");
+        SensorDisplay.Animate(0.04);
+
+        void Target(float value)
+        {
+            SensorDisplay.Add("t", value); SensorDisplay.Add("t", value); SensorDisplay.Add("t", value);
+            SensorDisplay.Publish(); SensorDisplay.Publish();
+        }
+
+        Target(100);
+        List<float> steps = [];
+        for (var i = 0; i < 6; i++) { SensorDisplay.Animate(0.04); steps.Add(SensorDisplay.GetBar("t")!.Value); }
+        var before = steps[^1] - steps[^2];
+
+        Target(0);
+        SensorDisplay.Animate(0.04);
+        var after = SensorDisplay.GetBar("t")!.Value - steps[^1];
+
+        Assert.True(Math.Abs(after - before) < 6, $"velocidade mudou de {before:F1} para {after:F1} em um quadro");
     }
 
     [Fact]

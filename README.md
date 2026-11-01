@@ -82,7 +82,7 @@ As temperaturas gerais do CPU e da GPU também ficam no topo da tela. Os valores
 - **Permissão de administrador uma vez**, para instalar o serviço de sensores. Depois, o app abre sem pedir nada. Sem o serviço, ele roda em modo limitado.
 - Uma conta do GitHub com Copilot, apenas para o painel do Copilot.
 
-Nada é instalado sem você confirmar. Se faltar o .NET 10, sem o qual o app não abre, o inicializador explica e pergunta antes de instalar pelo winget. O GitHub CLI é opcional, usado no painel do Copilot e nas atualizações: a aba Contas oferece a instalação. O driver PawnIO é oferecido no `-Install` e na aba Contas.
+Nada é instalado sem você confirmar: o inicializador mostra em uma única tela tudo o que falta e pede uma só confirmação. Sem o .NET 10 o app não abre. O GitHub CLI, usado no painel do Copilot e nas atualizações, entra pelo `-Install` ou pela aba Contas; o driver PawnIO, pelo `-Install` ou pela aba Ajustes.
 
 ## Instalação
 
@@ -102,12 +102,15 @@ cd wf-sys-mon-tui
 
 O `-Install`:
 
-1. Se faltar o .NET 10 (Runtime no pacote da release; SDK no código-fonte), pergunta e instala via winget.
+Mostra em uma tela o que será feito, pede uma única confirmação e então:
+
+1. Instala via winget o que faltar: .NET 10 (Runtime no pacote da release; SDK no código-fonte), GitHub CLI e PawnIO.
 2. A partir do código-fonte, compila o app em `out\`.
 3. Cria o atalho `%USERPROFILE%\bin\wf-sys-mon.cmd` e adiciona essa pasta ao `PATH` do usuário.
 4. Configura a status line do Claude Code em `~/.claude/settings.json`, sem sobrescrever uma que já exista.
-5. Oferece instalar o driver PawnIO, usado para ler os sensores.
-6. Instala o serviço de sensores. O Windows confirma pelo UAC, só desta vez.
+5. Instala o serviço de sensores.
+
+O Windows pode pedir o UAC para o serviço e para cada programa que precisar de administrador. Se escolher sair, nada é alterado.
 
 Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
@@ -115,7 +118,7 @@ Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
 ### Atualizações
 
-Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem substitui os arquivos e reabre sozinho; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
+Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem, substitui os arquivos e reabre sozinho; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
 
 ### zsh / bash (MSYS2, Git Bash)
 
@@ -136,7 +139,7 @@ A TUI abre no próprio terminal, como usuário comum e sem pedir permissão, por
 | Tecla | Ação |
 |---|---|
 | `1` / `2` | Recolher ou abrir a seção Hardware / IA |
-| `R` | Atualizar os dados de IA agora: consulta o Copilot e relê a cota, os logs e o plano do Claude |
+| `R` | Atualizar os dados de IA agora: consulta o Copilot e relê a cota, os logs e o plano do Claude. A cota do Claude só muda quando o Claude Code a envia, ao responder |
 | `←` `→` | Trocar entre as abas Monitoramento, Contas e Ajustes |
 | `A` | Abrir a aba Contas |
 | `S` | Abrir a aba Ajustes |
@@ -147,21 +150,29 @@ A TUI abre no próprio terminal, como usuário comum e sem pedir permissão, por
 
 As abas, o menu e os títulos das seções também respondem ao clique.
 
-### Contas e permissões
+### Contas
 
-Na primeira abertura, se faltar algo, a aba **Contas** abre sozinha. Use `↑` `↓` para escolher uma conta e `Enter` para entrar ou sair; com o mouse, o primeiro clique seleciona e o segundo executa.
+Na primeira abertura, se faltar algo, a aba com a pendência abre sozinha. Use `↑` `↓` para escolher uma conta e `Enter` para entrar ou sair; com o mouse, o primeiro clique seleciona e o segundo executa.
 
 | Item | O que faz |
 |---|---|
-| Driver de sensores | Mostra se o PawnIO está instalado e permite instalar com confirmação. Reabra o app depois. Para remover: `winget uninstall namazso.PawnIO`. |
-| Serviço de sensores | Instala, atualiza ou remove o serviço. Sem ele, o app continua em modo limitado, sem temperatura, potência e discos. |
 | GitHub Copilot | Faz o login no navegador, com um código de uso único. Se o GitHub CLI não estiver instalado, pede confirmação antes de instalar. Sair remove o login do GitHub CLI neste PC, o que também afeta outras ferramentas que usam o `gh`; o token não é revogado no GitHub. |
 | Claude Code | Abre o login do próprio Claude Code em outra janela e detecta quando ele termina. Sair usa `claude auth logout` e interrompe as sessões abertas até um novo login. |
-| Cota do Claude | Configura a status line depois de pedir confirmação. |
 
 ### Ajustes
 
 Cada ajuste mostra todas as opções lado a lado, com a atual em destaque. Clique em uma opção para escolher, ou use `↑` `↓` para ir até o ajuste e `Enter` para passar à próxima opção.
+
+Os painéis do Copilot e do Claude podem ser mostrados ou ocultados um a um. Com os dois ocultos, a seção de IA some e o hardware fica sozinho, centralizado. Um painel oculto não cobra pendências, mas seus dados continuam sendo atualizados em segundo plano.
+
+A mesma aba mostra o que está instalado na máquina:
+
+| Item | O que faz |
+|---|---|
+| Serviço de sensores | Instala, atualiza ou remove o serviço. Sem ele, o app continua em modo limitado, sem temperatura, potência e discos. |
+| Driver de sensores | Mostra se o PawnIO está instalado e permite instalar com confirmação. Reabra o app depois. Para remover: `winget uninstall namazso.PawnIO`. |
+| Status line do Claude Code | É por ela que a cota do Claude chega ao app. Configura depois de pedir confirmação. |
+| Versão | Procura e instala atualizações. |
 
 ### Tamanhos de tela
 
@@ -187,9 +198,9 @@ Temperatura, potência e discos exigem privilégio de administrador. Em vez de r
 - **Só atende a conta do Windows que o instalou.** A TUI também confere se quem responde é mesmo um processo privilegiado.
 - **Só lê enquanto há uma janela aberta.** Sem janelas, fica ocioso e fecha o acesso aos sensores.
 
-Instalar, atualizar e remover pedem confirmação do Windows. Para isso, use a aba Contas, ou `wf-sys-mon -Install` e `wf-sys-mon -Uninstall`.
+Instalar, atualizar e remover pedem confirmação do Windows. Para isso, use a aba Ajustes, ou `wf-sys-mon -Install` e `wf-sys-mon -Uninstall`.
 
-**Depois de atualizar o código:** o serviço roda da cópia em `Program Files`, não de `out\`. Se o formato dos dados mudar, a aba Contas mostra "Outdated"; use a mesma aba para atualizar.
+**Depois de atualizar o código:** o serviço roda da cópia em `Program Files`, não de `out\`. Se o formato dos dados mudar, a aba Ajustes mostra "Outdated"; use a mesma aba para atualizar.
 
 ## Painel do GitHub Copilot
 
@@ -333,7 +344,7 @@ src/
 | `wf-sys-mon` não é reconhecido | Abra um novo terminal após o `-Install`. Confira se `%USERPROFILE%\bin` está no `PATH`. |
 | "O sistema não pode encontrar o caminho especificado" | A pasta do projeto foi movida ou renomeada. Rode `.\wf-sys-mon.cmd -Install` na nova pasta. |
 | Erro `0x800711C7` ao abrir | O **Smart App Control** bloqueou a DLL recompilada (ele libera arquivos pelo hash). Desative-o em *Segurança do Windows → Controle de aplicativos e navegador*. |
-| O app ainda pede permissão ao abrir | O serviço não está instalado. Rode `wf-sys-mon -Install` ou instale pela aba Contas. |
+| O app ainda pede permissão ao abrir | O serviço não está instalado. Rode `wf-sys-mon -Install` ou instale pela aba Ajustes. |
 | Temperaturas aparecem vazias | Em Contas (`A`), confira se o serviço está ativo e se o PawnIO está instalado. |
 | Falha ao recompilar | O app ainda está aberto e bloqueia os arquivos em `out\`. Feche as janelas e tente de novo. |
 | Painel do Copilot com "conta sem Copilot" | A conta conectada não tem assinatura do Copilot. |

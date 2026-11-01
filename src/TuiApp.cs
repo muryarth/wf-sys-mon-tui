@@ -105,7 +105,7 @@ sealed class TuiApp(UiActions actions)
             _statusLine = ClaudeSetup.State();
             _nextStatusLineRead = DateTime.Now.AddSeconds(5);
         }
-        OpenAccountsOnFirstRun(data);
+        OpenPendingOnFirstRun(data);
 
         if (_claudeLoginPending && DateTime.Now >= _nextClaudeCheck)
         {
@@ -126,22 +126,26 @@ sealed class TuiApp(UiActions actions)
         return frame;
     }
 
-    void OpenAccountsOnFirstRun(UiData data)
+    void OpenPendingOnFirstRun(UiData data)
     {
         if (S.SetupSeen || DateTime.Now - _startedAt < TimeSpan.FromSeconds(3)) return;
         S.SetupSeen = true;
         S.Save();
-        if (PendingSetup(data) > 0 && _page == Page.Main) Open(Page.Accounts);
+        if (_page != Page.Main) return;
+        if (PendingAccounts(data) > 0) Open(Page.Accounts);
+        else if (PendingSettings(data) > 0) Open(Page.Settings);
     }
 
-    int PendingSetup(UiData data)
+    // Um agente oculto nao cobra pendencia.
+    static int PendingAccounts(UiData data) =>
+        (S.ShowCopilot && data.Copilot.NeedsLogin ? 1 : 0) + (S.ShowClaude && data.Claude.LoggedIn == false ? 1 : 0);
+
+    int PendingSettings(UiData data)
     {
         var pending = 0;
         if (data.Mode != SensorMode.Service) pending++;
         if (!data.DriverInstalled && !_driverInstalledNow) pending++;
-        if (data.Copilot.NeedsLogin) pending++;
-        if (data.Claude.LoggedIn == false) pending++;
-        if (_statusLine is StatusLineState.NotConfigured or StatusLineState.InvalidSettings) pending++;
+        if (S.ShowClaude && _statusLine is StatusLineState.NotConfigured or StatusLineState.InvalidSettings) pending++;
         return pending;
     }
 
@@ -166,12 +170,13 @@ sealed class TuiApp(UiActions actions)
     // Devolve a primeira linha livre.
     int BuildTop(Frame frame, UiData data, int left, int total, out int languageX, out int languageY)
     {
-        var pending = PendingSetup(data);
+        var pendingAccounts = PendingAccounts(data);
+        var pendingSettings = PendingSettings(data);
         var tabs = new (string Label, Page Page)[]
         {
             (T("Monitoramento", "Monitoring"), Page.Main),
-            (T("Contas", "Accounts") + (pending > 0 ? $" ({pending})" : ""), Page.Accounts),
-            (T("Ajustes", "Settings"), Page.Settings),
+            (T("Contas", "Accounts") + (pendingAccounts > 0 ? $" ({pendingAccounts})" : ""), Page.Accounts),
+            (T("Ajustes", "Settings") + (pendingSettings > 0 ? $" ({pendingSettings})" : ""), Page.Settings),
         };
 
         var tabRow = "";
@@ -267,11 +272,23 @@ sealed class TuiApp(UiActions actions)
     sealed record ColumnPlan(string Key, int X, int Width, List<string> Sections);
 
     // Pouco espaco horizontal: uma coluna so, usando toda a largura. Com espaco: uma coluna por secao,
-    // de tamanhos iguais, limitadas a MaxColumnWidth e centralizadas lado a lado.
+    // de tamanhos iguais, limitadas a MaxColumnWidth e centralizadas lado a lado. Com todos os agentes
+    // ocultos, a secao de IA nao existe e o hardware fica sozinho, centralizado.
+    // A ultima celula do terminal fica livre: o "apagar ate o fim da linha" do desenho apagaria o que
+    // estivesse nela, como a barra de rolagem, porque o cursor continua ali depois de escrever.
     static List<ColumnPlan> PlanColumns(int width, int height)
     {
+        width--;
         var columnWidth = (width - ColumnGap) / 2;
-        if (IsVertical(width, height) || columnWidth < MinColumnWidth)
+        var narrow = IsVertical(width, height) || columnWidth < MinColumnWidth;
+
+        if (!S.AnyAgentVisible)
+        {
+            var alone = narrow ? width : Math.Min(width, MaxColumnWidth);
+            return [new ColumnPlan("all", (width - alone) / 2, alone, ["hardware"])];
+        }
+
+        if (narrow)
             return [new ColumnPlan("all", 0, width, ["hardware", "ai"])];
 
         columnWidth = Math.Min(columnWidth, MaxColumnWidth);
@@ -478,6 +495,18 @@ sealed class TuiApp(UiActions actions)
             Array.IndexOf(Settings.CopilotOptions, S.CopilotSeconds), i => Set(() => S.CopilotSeconds = Settings.CopilotOptions[i]));
         Options(ref y, T("Ícones", "Icons"), [T("Ligados", "On"), T("Desligados", "Off")],
             S.Icons ? 0 : 1, i => Set(() => S.Icons = i == 0));
+
+        void Agent(ref int row, string label, bool visible, Action<bool> set) =>
+            Options(ref row, label, [T("Mostrar", "Show"), T("Ocultar", "Hide")], visible ? 0 : 1, i =>
+            {
+                Set(() => set(i == 0));
+                ClearRequested = true;  // o layout da tela principal pode mudar
+            });
+
+        Agent(ref y, T("Painel do Copilot", "Copilot panel"), S.ShowCopilot, v => S.ShowCopilot = v);
+        Agent(ref y, T("Painel do Claude", "Claude panel"), S.ShowClaude, v => S.ShowClaude = v);
+
+        AddMachineRows(frame, ref y, x, w, data);
         AddUpdateRow(frame, ref y, x, w, data);
 
         _selected = _items.Count == 0 ? 0 : Math.Clamp(_selected, 0, _items.Count - 1);
@@ -525,29 +554,23 @@ sealed class TuiApp(UiActions actions)
         ],
         () => actions.InstallUpdate(updateService));
 
-    void BuildAccounts(Frame frame, UiData data)
+    // Uma linha por item, com o estado. A acao so aparece na linha selecionada, para a tela ficar limpa.
+    void AddStatusRow(Frame frame, ref int row, int x, int w, int labelWidth, string label, bool ok, string status, string? actionName, Action? action, string[]? details = null)
     {
-        _items = [];
-        var layout = PlanColumns(frame.Width, frame.Height);
-        var left = layout[0].X;
-        var total = layout[^1].X + layout[^1].Width - left;
-        var y = BuildTop(frame, data, left, total, out var languageX, out var languageY);
+        var isSelected = _items.Count == _selected;
+        var mark = $"[{(ok ? Theme.Good : Theme.Warn)}]{(ok ? "*" : "!")}[/]";
+        var labelStyle = isSelected ? $"bold {Theme.Clock}" : Theme.Label;
+        var statusStyle = isSelected ? $"bold {Theme.Clock}" : "bold";
+        var text = $"[{labelStyle}]{Markup.Escape(Pad(label, labelWidth))}[/] {mark} [{statusStyle}]{Markup.Escape(status)}[/]";
+        if (isSelected && actionName is not null)
+            text += $"     {Dashboard.Key("Enter")} [{Theme.Clock}]{Markup.Escape(actionName)}[/]";
+        AddItem(frame, ref row, x, w, text, action ?? (() => { }), details ?? []);
+    }
 
-        var x = left + 1;
-        var w = Math.Min(total - 2, MaxPageWidth);
-
-        // Uma linha por conta. A acao so aparece na linha selecionada, para a tela ficar limpa.
-        void Account(ref int row, string label, bool ok, string status, string? actionName, Action? action, string[]? details = null)
-        {
-            var isSelected = _items.Count == _selected;
-            var mark = $"[{(ok ? Theme.Good : Theme.Warn)}]{(ok ? "*" : "!")}[/]";
-            var labelStyle = isSelected ? $"bold {Theme.Clock}" : Theme.Label;
-            var statusStyle = isSelected ? $"bold {Theme.Clock}" : "bold";
-            var text = $"[{labelStyle}]{Markup.Escape(Pad(label, 22))}[/] {mark} [{statusStyle}]{Markup.Escape(status)}[/]";
-            if (isSelected && actionName is not null)
-                text += $"     {Dashboard.Key("Enter")} [{Theme.Clock}]{Markup.Escape(actionName)}[/]";
-            AddItem(frame, ref row, x, w, text, action ?? (() => { }), details ?? []);
-        }
+    void AddMachineRows(Frame frame, ref int y, int x, int w, UiData data)
+    {
+        void Account(ref int row, string label, bool ok, string status, string? actionName, Action? action, string[]? details = null) =>
+            AddStatusRow(frame, ref row, x, w, 28, label, ok, status, actionName, action, details);
 
         var serviceOk = data.Mode == SensorMode.Service;
         Account(ref y, T("Serviço de sensores", "Sensor service"), serviceOk,
@@ -576,6 +599,33 @@ sealed class TuiApp(UiActions actions)
             driverOk || _installingDriver ? null : T("Instalar", "Install"),
             driverOk || _installingDriver ? null : ConfirmInstallDriver,
             driverOk ? null : [T("Necessário para temperatura e potência da CPU, entre outros sensores.", "Required for CPU temperature and power, among other sensors.")]);
+
+        var state = _statusLine;
+        var statusText = state switch
+        {
+            StatusLineState.Ours => T("Configurada", "Configured"),
+            StatusLineState.Other => T("Outra status line em uso", "Another status line in use"),
+            StatusLineState.InvalidSettings => T("settings.json inválido", "Invalid settings.json"),
+            _ => T("Não configurada", "Not configured"),
+        };
+        Account(ref y, T("Status line do Claude Code", "Claude Code status line"), state == StatusLineState.Ours, statusText,
+            state == StatusLineState.NotConfigured ? T("Configurar", "Set up") : null,
+            state == StatusLineState.NotConfigured ? ConfirmStatusLine : null);
+    }
+
+    void BuildAccounts(Frame frame, UiData data)
+    {
+        _items = [];
+        var layout = PlanColumns(frame.Width, frame.Height);
+        var left = layout[0].X;
+        var total = layout[^1].X + layout[^1].Width - left;
+        var y = BuildTop(frame, data, left, total, out var languageX, out var languageY);
+
+        var x = left + 1;
+        var w = Math.Min(total - 2, MaxPageWidth);
+
+        void Account(ref int row, string label, bool ok, string status, string? actionName, Action? action, string[]? details = null) =>
+            AddStatusRow(frame, ref row, x, w, 22, label, ok, status, actionName, action, details);
 
         var ghOk = !data.Copilot.NeedsLogin && data.Copilot.Snapshot is not null;
         var ghBusy = data.Auth.Step is AuthStep.InstallingGh or AuthStep.Starting or AuthStep.WaitingUser;
@@ -619,18 +669,6 @@ sealed class TuiApp(UiActions actions)
         Account(ref y, "Claude Code", data.Claude.LoggedIn == true, claudeText, claudeAction,
             claudeAction is null ? null : data.Claude.LoggedIn == true ? ConfirmLogoutClaude : LoginClaude,
             data.Claude.LoggedIn is null && data.Claude.AccountChecked ? [T("Instale o Claude Code e reabra o app: https://claude.com/claude-code", "Install Claude Code and reopen the app: https://claude.com/claude-code")] : null);
-
-        var state = _statusLine;
-        var statusText = state switch
-        {
-            StatusLineState.Ours => T("Configurada", "Configured"),
-            StatusLineState.Other => T("Outra status line em uso", "Another status line in use"),
-            StatusLineState.InvalidSettings => T("settings.json inválido", "Invalid settings.json"),
-            _ => T("Não configurada", "Not configured"),
-        };
-        Account(ref y, T("Cota do Claude", "Claude quota"), state == StatusLineState.Ours, statusText,
-            state == StatusLineState.NotConfigured ? T("Configurar", "Set up") : null,
-            state == StatusLineState.NotConfigured ? ConfirmStatusLine : null);
 
         _selected = _items.Count == 0 ? 0 : Math.Clamp(_selected, 0, _items.Count - 1);
 
@@ -677,7 +715,13 @@ sealed class TuiApp(UiActions actions)
     // ------------------------------------------------------------- Comandos
 
     void ToggleHardware() { S.HardwareCollapsed = !S.HardwareCollapsed; S.Save(); Dirty = true; }
-    void ToggleAi() { S.AiCollapsed = !S.AiCollapsed; S.Save(); Dirty = true; }
+    void ToggleAi()
+    {
+        if (!S.AnyAgentVisible) return;
+        S.AiCollapsed = !S.AiCollapsed;
+        S.Save();
+        Dirty = true;
+    }
 
     void ToggleLanguage()
     {

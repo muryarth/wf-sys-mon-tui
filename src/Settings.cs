@@ -25,6 +25,11 @@ sealed class Settings
     public int DisplaySeconds { get; set; } = 2;
     public int CopilotSeconds { get; set; } = 30;
     public bool SetupSeen { get; set; }
+    public bool ShowCopilot { get; set; } = true;
+    public bool ShowClaude { get; set; } = true;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool AnyAgentVisible => ShowCopilot || ShowClaude;
 
     static Settings Load()
     {
