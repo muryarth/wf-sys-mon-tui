@@ -86,6 +86,14 @@ O .NET 10 e o GitHub CLI não precisam estar instalados: o inicializador instala
 
 ## Instalação
 
+Baixe o `.zip` da [última release](https://github.com/muryarth/wf-sys-mon-tui/releases/latest), extraia em uma pasta definitiva e rode, nela:
+
+```powershell
+.\wf-sys-mon.cmd -Install
+```
+
+Ou, para compilar a partir do código-fonte:
+
 ```powershell
 git clone https://github.com/muryarth/wf-sys-mon-tui.git
 cd wf-sys-mon-tui
@@ -94,8 +102,8 @@ cd wf-sys-mon-tui
 
 O `-Install`:
 
-1. Instala via winget o que faltar: .NET 10 SDK e GitHub CLI.
-2. Compila o app em `out\`.
+1. Instala via winget o que faltar: GitHub CLI e .NET 10 (Runtime no pacote da release; SDK no código-fonte).
+2. A partir do código-fonte, compila o app em `out\`.
 3. Cria o atalho `%USERPROFILE%\bin\wf-sys-mon.cmd` e adiciona essa pasta ao `PATH` do usuário.
 4. Configura a status line do Claude Code em `~/.claude/settings.json`, sem sobrescrever uma que já exista.
 5. Oferece instalar o driver PawnIO, usado para ler os sensores.
@@ -104,6 +112,10 @@ O `-Install`:
 Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
 > O atalho aponta para a pasta onde o `-Install` foi executado. Se mover ou renomear a pasta, rode `.\wf-sys-mon.cmd -Install` de novo.
+
+### Atualizações
+
+Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem e substitui os arquivos; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
 
 ### zsh / bash (MSYS2, Git Bash)
 
@@ -290,6 +302,7 @@ tests/              testes automatizados
 src/
   Program.cs        entrada, escolha da fonte dos sensores e loop principal
   AppPaths.cs       pasta dos dados do usuário
+  Updater.cs        busca, verificação e instalação de novas versões
   SensorService.cs  serviço de sensores e sua instalação
   SensorServer.cs   envio das leituras pelo pipe local
   SensorClient.cs   recebimento das leituras na TUI

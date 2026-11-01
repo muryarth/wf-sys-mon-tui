@@ -40,7 +40,7 @@ static class Dashboard
         Sensors(gpu, SensorType.Temperature).FirstOrDefault(s => s.Name.Contains("Core"));
 
     // Ainda chegando dados: indicador animado, em vez de parecer que algo falta.
-    static string Loading(string text) =>
+    public static string Loading(string text) =>
         $"[{Theme.Clock}]{Markup.Escape(StartupUi.SpinnerFrame(DateTime.Now).ToString())}[/] [{Theme.Unit}]{Markup.Escape(text)}[/]";
 
     // Estrutura do painel enquanto os dados nao chegam: rotulos reais e valores apagados, para os

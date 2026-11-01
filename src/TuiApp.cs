@@ -9,7 +9,7 @@ namespace WfSysMon;
 enum SensorMode { Service, ServiceOutdated, Elevated, Limited }
 
 // DriverInstalled: PawnIO, o driver que a biblioteca de sensores usa para o acesso de baixo nivel.
-sealed record UiData(IReadOnlyList<IHardware> Hardware, CopilotState Copilot, ClaudeState Claude, AuthState Auth, SensorMode Mode, bool DriverInstalled = true);
+sealed record UiData(IReadOnlyList<IHardware> Hardware, CopilotState Copilot, ClaudeState Claude, AuthState Auth, SensorMode Mode, bool DriverInstalled = true, UpdateState? Update = null, bool CanInstallUpdate = false);
 
 sealed record UiActions(
     Action Refresh,
@@ -22,6 +22,8 @@ sealed record UiActions(
     Action<Action<string?>> InstallDriver,
     Action<Action<string?>> InstallService,
     Action<Action<string?>> RemoveService,
+    Action CheckUpdate,
+    Action<bool> InstallUpdate,   // true: atualiza tambem o servico de sensores
     Action Quit);
 
 sealed record HitArea(int X, int Y, int W, int H, Action Action);
@@ -476,11 +478,52 @@ sealed class TuiApp(UiActions actions)
             Array.IndexOf(Settings.CopilotOptions, S.CopilotSeconds), i => Set(() => S.CopilotSeconds = Settings.CopilotOptions[i]));
         Options(ref y, T("Ícones", "Icons"), [T("Ligados", "On"), T("Desligados", "Off")],
             S.Icons ? 0 : 1, i => Set(() => S.Icons = i == 0));
+        AddUpdateRow(frame, ref y, x, w, data);
 
         _selected = _items.Count == 0 ? 0 : Math.Clamp(_selected, 0, _items.Count - 1);
 
         if (_languageOpen) BuildLanguageList(frame, languageX, languageY + 1);
     }
+
+    void AddUpdateRow(Frame frame, ref int y, int x, int w, UiData data)
+    {
+        var update = data.Update ?? new UpdateState(UpdateStep.Idle);
+        var selected = _items.Count == _selected;
+        string Hint(string text) => selected ? $"   {Dashboard.Key("Enter")} [{Theme.Label}]{Markup.Escape(text)}[/]" : "";
+
+        var check = T("procurar atualizações", "check for updates");
+        var (status, action) = update.Step switch
+        {
+            UpdateStep.Checking => (Dashboard.Loading(T("procurando", "checking")), null),
+            UpdateStep.UpToDate => ($"[{Theme.Unit}]{T("Atualizado", "Up to date")}[/]" + Hint(check), actions.CheckUpdate),
+            UpdateStep.Available when data.CanInstallUpdate => (
+                $"[bold {Theme.Warn}]v{Markup.Escape(update.Version ?? "")}[/] [{Theme.Unit}]{T("disponível", "available")}[/]" + Hint(T("instalar", "install")),
+                () => ConfirmUpdate(update.Version ?? "", data.Mode is SensorMode.Service or SensorMode.ServiceOutdated)),
+            UpdateStep.Available => (
+                $"[bold {Theme.Warn}]v{Markup.Escape(update.Version ?? "")}[/] [{Theme.Unit}]{T("disponível: git pull e wf-sys-mon -Rebuild", "available: git pull and wf-sys-mon -Rebuild")}[/]",
+                (Action?)null),
+            UpdateStep.Installing => (Dashboard.Loading(update.Detail ?? ""), null),
+            UpdateStep.Installed => (
+                $"[bold {Theme.Warn}]v{Markup.Escape(update.Version ?? "")}[/] [{Theme.Unit}]{T("instalada; reabra o app", "installed; reopen the app")}[/]"
+                    + (update.Detail is { } detail ? $"  [{Theme.Bad}]{Markup.Escape(detail)}[/]" : ""),
+                null),
+            UpdateStep.Failed => ($"[{Theme.Bad}]{Markup.Escape(update.Detail ?? "")}[/]" + Hint(T("tentar de novo", "try again")), actions.CheckUpdate),
+            _ => (Hint(check), actions.CheckUpdate),
+        };
+
+        const int labelWidth = 28;
+        var version = Updater.CurrentVersion.ToString();
+        AddItem(frame, ref y, x, w, $"[{(selected && action is not null ? $"bold {Theme.Clock}" : Theme.Label)}]{Markup.Escape(Pad(T("Versão", "Version"), labelWidth))}[/]  [{Theme.Value}]{Markup.Escape(version)}[/]   {status}", action);
+    }
+
+    void ConfirmUpdate(string version, bool updateService) => Confirm(
+        [
+            T($"Baixa a versão {version} do GitHub, confere o hash e a origem do pacote e substitui os arquivos do app. Reabra o app depois.", $"Downloads version {version} from GitHub, verifies the package hash and origin, and replaces the app files. Reopen the app afterwards."),
+            updateService
+                ? T("O serviço de sensores também é atualizado: o Windows confirma (UAC) e as leituras param por alguns segundos.", "The sensor service is updated too: Windows asks for confirmation (UAC) and the readings stop for a few seconds.")
+                : T("Preferências e histórico não são alterados.", "Preferences and history are not changed."),
+        ],
+        () => actions.InstallUpdate(updateService));
 
     void BuildAccounts(Frame frame, UiData data)
     {

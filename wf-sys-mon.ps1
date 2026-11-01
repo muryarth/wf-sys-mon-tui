@@ -2,7 +2,7 @@
   wf-sys-mon - inicializador do Workflow System Monitor.
 
   Na primeira execucao instala o que faltar (.NET 10 e GitHub CLI, via winget),
-  compila o app se necessario e abre a TUI. Com o servico de sensores instalado, ela abre sem
+  compila o app se necessario (o pacote da release ja vem compilado) e abre a TUI. Com o servico de sensores instalado, ela abre sem
   pedir permissao.
 
     wf-sys-mon             executa (instalando/compilando o que for preciso)
@@ -23,7 +23,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root    = $PSScriptRoot
 $outDir  = Join-Path $root 'out'
-$dll     = Join-Path $outDir 'WfSysMon.dll'
+# No pacote da release o app fica ao lado deste script; a partir do codigo-fonte, em out\.
+$released = Test-Path (Join-Path $root 'WfSysMon.dll')
+$dll     = if ($released) { Join-Path $root 'WfSysMon.dll' } else { Join-Path $outDir 'WfSysMon.dll' }
 $project = Join-Path $root 'WfSysMon.csproj'
 $dotnet  = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
 $ghPath  = Join-Path $env:ProgramFiles 'GitHub CLI\gh.exe'
@@ -54,6 +56,7 @@ function Test-DotnetSdk {
 }
 
 function Test-NeedsBuild {
+    if ($released) { return $false }
     if ($Rebuild -or -not (Test-Path $dll)) { return $true }
     $built = (Get-Item $dll).LastWriteTimeUtc
     $sources = @(Get-ChildItem (Join-Path $root 'src') -Recurse -Filter *.cs) + (Get-Item $project) + (Get-Item (Join-Path $root 'app.manifest'))

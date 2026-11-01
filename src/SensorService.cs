@@ -156,7 +156,8 @@ static class ServiceInstaller
         if (string.Equals(source, InstallDir, StringComparison.OrdinalIgnoreCase)) return;
         Directory.CreateDirectory(InstallDir);
 
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        // ".old": versoes substituidas por uma atualizacao, ainda nao apagadas.
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".old", StringComparison.OrdinalIgnoreCase)))
         {
             var relative = Path.GetRelativePath(source, file);
             var target = Path.Combine(InstallDir, relative);

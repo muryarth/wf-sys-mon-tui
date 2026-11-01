@@ -11,6 +11,7 @@
     <SelfContained>false</SelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>WfSysMon</AssemblyName>
+    <Version>0.1.0</Version>
     <RootNamespace>WfSysMon</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
