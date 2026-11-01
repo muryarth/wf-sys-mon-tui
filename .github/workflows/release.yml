@@ -41,7 +41,8 @@ jobs:
       - name: Publish
         env:
           VERSION: ${{ steps.tag.outputs.version }}
-        run: dotnet publish WfSysMon.csproj -c Release -r win-x64 --self-contained true -o publish "-p:Version=$env:VERSION" --nologo
+        # Sem .exe proprio: nao assinado, ele e bloqueado pelo Smart App Control; dotnet.exe e assinado.
+        run: dotnet publish WfSysMon.csproj -c Release -r win-x64 --self-contained false -p:UseAppHost=false -o publish "-p:Version=$env:VERSION" --nologo
 
       - name: Package
         id: package
@@ -51,7 +52,7 @@ jobs:
         run: |
           New-Item -ItemType Directory dist | Out-Null
           $zip = "wf-sys-mon-$env:VERSION-win-x64.zip"
-          Copy-Item LICENSE publish/
+          Copy-Item LICENSE, packaging/wf-sys-mon.cmd publish/
           Compress-Archive -Path publish/* -DestinationPath "dist/$zip"
           $hash = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $zip" | Out-File "dist/$zip.sha256" -Encoding ascii
