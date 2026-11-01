@@ -55,7 +55,8 @@ static class Screen
         for (var i = 0; i < lines.Count; i++)
         {
             if (i < _shown.Count && _shown[i] == lines[i]) continue;
-            sb.Append($"{Esc}{i + 1};1H").Append(lines[i]).Append($"{Esc}0m{Esc}K");
+            // Limpa antes de escrever: depois, o cursor ainda estaria sobre a ultima celula e a apagaria.
+            sb.Append($"{Esc}{i + 1};1H{Esc}0m{Esc}2K").Append(lines[i]).Append($"{Esc}0m");
         }
         if (lines.Count < _shown.Count) sb.Append($"{Esc}{lines.Count + 1};1H{Esc}0m{Esc}J");
         _shown = lines.ToList();

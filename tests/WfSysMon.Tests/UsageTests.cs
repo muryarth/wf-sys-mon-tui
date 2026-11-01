@@ -193,5 +193,9 @@ public class UsageTests
         Assert.Contains('X', changed);
         Assert.DoesNotContain('a', changed);
         Assert.DoesNotContain('c', changed);
+
+        // A limpeza vem antes do texto: depois dele, apagaria a ultima celula da linha.
+        Assert.True(changed.IndexOf("[2K", StringComparison.Ordinal) < changed.IndexOf('X'));
+        Assert.DoesNotContain("[K", changed);
     }
 }
