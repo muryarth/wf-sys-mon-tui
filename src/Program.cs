@@ -15,6 +15,12 @@ static class Program
 
     static readonly TimeSpan AnimationInterval = TimeSpan.FromMilliseconds(80);
 
+    // Tempo para ler o resultado antes de reabrir; um aviso sobre o servico precisa de mais.
+    static readonly TimeSpan ReopenDelay = TimeSpan.FromSeconds(1.5);
+    static readonly TimeSpan ReopenDelayWithNotice = TimeSpan.FromSeconds(6);
+
+    static bool _reopen;
+
     static int Main(string[] args)
     {
         // O servico roda sem console: precisa vir antes de qualquer acesso a ele.
@@ -35,7 +41,9 @@ static class Program
             case [RequestUninstallArgument]: return Report(ServiceInstaller.RequestAsync(ServiceInstaller.UninstallArgument).GetAwaiter().GetResult());
         }
 
-        return Run(IsAdministrator(), args.Contains(LimitedArgument));
+        var limited = args.Contains(LimitedArgument);
+        var code = Run(IsAdministrator(), limited);
+        return _reopen ? Updater.Reopen(typeof(Program).Assembly.Location, limited ? LimitedArgument : "") : code;
     }
 
     static int Report(string? failure)
@@ -47,7 +55,8 @@ static class Program
     static int Run(bool isAdmin, bool limited)
     {
         using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+        ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+        Console.CancelKeyPress += onCancel;
 
         // Os valores vem do servico, se ele existir. Sem ele, o app le o que conseguir por conta propria.
         var sensorGate = new object();
@@ -129,6 +138,7 @@ static class Program
             var lastClaudeVersion = -1;
             var lastAuth = auth.State;
             var lastUpdate = updater.State;
+            DateTime? installedAt = null;
             var dirty = false;
             var clearFirst = false;
             var lastAnimation = DateTime.Now;
@@ -216,6 +226,16 @@ static class Program
                 }
                 dirty |= ustate.Step is UpdateStep.Checking or UpdateStep.Installing;
 
+                if (ustate.Step == UpdateStep.Installed)
+                {
+                    installedAt ??= DateTime.Now;
+                    if (DateTime.Now - installedAt >= (ustate.Detail is null ? ReopenDelay : ReopenDelayWithNotice))
+                    {
+                        _reopen = true;
+                        cts.Cancel();
+                    }
+                }
+
                 // O indicador de "carregando" precisa girar mesmo sem novas leituras.
                 dirty |= Dashboard.IsLoading(local?.Hardware ?? Volatile.Read(ref remoteHardware), cstate, clstate);
 
@@ -244,6 +264,7 @@ static class Program
         }
         finally
         {
+            Console.CancelKeyPress -= onCancel;
             cts.Cancel();
             Screen.Leave();
             local?.Dispose();

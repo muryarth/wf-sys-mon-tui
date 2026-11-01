@@ -115,7 +115,7 @@ Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
 ### Atualizações
 
-Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem e substitui os arquivos; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
+Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem substitui os arquivos e reabre sozinho; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
 
 ### zsh / bash (MSYS2, Git Bash)
 

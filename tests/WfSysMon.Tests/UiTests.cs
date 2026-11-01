@@ -644,7 +644,7 @@ public class UiTests
         var instalada = Data() with { Update = new UpdateState(UpdateStep.Installed, "9.9.9") };
         a32.Build(instalada, 90, 81);
         a32.Handle(new KeyInput(ConsoleKey.S, 's'));
-        Check("instalada pede para reabrir", Dump(a32.Build(instalada, 90, 81)).Contains("reabra o app"));
+        Check("instalada avisa que vai reabrir", Dump(a32.Build(instalada, 90, 81)).Contains("reabrindo"));
 
         // Icones desligados
         settings.Icons = false;

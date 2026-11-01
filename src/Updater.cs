@@ -286,6 +286,32 @@ sealed partial class Updater(
         }
     }
 
+    // Abre a versao nova no mesmo terminal e espera ela fechar. Este processo segura os arquivos
+    // antigos ate la, entao os ".old" so saem na abertura seguinte.
+    public static int Reopen(string dll, string arguments)
+    {
+        var dotnet = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
+
+        // Ctrl+C e da versao nova; este processo so termina depois dela.
+        Console.CancelKeyPress += (_, e) => e.Cancel = true;
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(dotnet, $"\"{dll}\" {arguments}") { UseShellExecute = false });
+            if (process is not null)
+            {
+                process.WaitForExit();
+                return process.ExitCode;
+            }
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // cai no aviso abaixo
+        }
+
+        Console.WriteLine(T("Atualização instalada. Abra o app de novo.", "Update installed. Open the app again."));
+        return 1;
+    }
+
     // Quem instala o servico e a versao nova, ja em disco; o Windows confirma pelo UAC.
     static async Task<string?> RefreshServiceAsync(string dll)
     {
