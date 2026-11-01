@@ -73,7 +73,7 @@ As temperaturas gerais do CPU e da GPU também ficam no topo da tela. Os valores
 | [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 0.9.6 | Leitura dos sensores de hardware | MPL-2.0 |
 | [PawnIO](https://github.com/namazso/PawnIO) | Driver de sensores, instalado à parte pelo winget | GPL-2.0 |
 | [GitHub CLI](https://cli.github.com/) (`gh`) | Login no GitHub e armazenamento do token | MIT |
-| [winget](https://learn.microsoft.com/windows/package-manager/) | Instalação automática das dependências | — |
+| [winget](https://learn.microsoft.com/windows/package-manager/) | Instalação das dependências, com confirmação | — |
 | PowerShell 5.1+ | Script inicializador `wf-sys-mon.ps1` | — |
 
 ## Requisitos
@@ -82,7 +82,7 @@ As temperaturas gerais do CPU e da GPU também ficam no topo da tela. Os valores
 - **Permissão de administrador uma vez**, para instalar o serviço de sensores. Depois, o app abre sem pedir nada. Sem o serviço, ele roda em modo limitado.
 - Uma conta do GitHub com Copilot, apenas para o painel do Copilot.
 
-O .NET 10 e o GitHub CLI não precisam estar instalados: o inicializador instala o que faltar. O driver PawnIO é oferecido no `-Install` e na aba Contas, sempre com confirmação.
+Nada é instalado sem você confirmar. Se faltar o .NET 10, sem o qual o app não abre, o inicializador explica e pergunta antes de instalar pelo winget. O GitHub CLI é opcional, usado no painel do Copilot e nas atualizações: a aba Contas oferece a instalação. O driver PawnIO é oferecido no `-Install` e na aba Contas.
 
 ## Instalação
 
@@ -102,7 +102,7 @@ cd wf-sys-mon-tui
 
 O `-Install`:
 
-1. Instala via winget o que faltar: GitHub CLI e .NET 10 (Runtime no pacote da release; SDK no código-fonte).
+1. Se faltar o .NET 10 (Runtime no pacote da release; SDK no código-fonte), pergunta e instala via winget.
 2. A partir do código-fonte, compila o app em `out\`.
 3. Cria o atalho `%USERPROFILE%\bin\wf-sys-mon.cmd` e adiciona essa pasta ao `PATH` do usuário.
 4. Configura a status line do Claude Code em `~/.claude/settings.json`, sem sobrescrever uma que já exista.
@@ -115,7 +115,7 @@ Depois, abra **um novo terminal** para o comando `wf-sys-mon` ficar disponível.
 
 ### Atualizações
 
-Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem e substitui os arquivos; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
+Na aba Ajustes, a linha **Versão** procura novas versões, sempre a seu pedido. Instalando pelo pacote, o app baixa a versão nova, confere o hash e a atestação de origem substitui os arquivos e reabre sozinho; se a origem não puder ser confirmada, nada é alterado. Isso exige o GitHub CLI com login. O serviço de sensores é atualizado junto, com confirmação do UAC. Quem compilou do código-fonte atualiza com `git pull` e `wf-sys-mon -Rebuild`.
 
 ### zsh / bash (MSYS2, Git Bash)
 

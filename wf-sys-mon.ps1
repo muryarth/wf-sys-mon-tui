@@ -1,8 +1,8 @@
 <#
   wf-sys-mon - inicializador do Workflow System Monitor.
 
-  Na primeira execucao instala o que faltar (.NET 10 e GitHub CLI, via winget),
-  compila o app se necessario (o pacote da release ja vem compilado) e abre a TUI. Com o servico de sensores instalado, ela abre sem
+  Se faltar o .NET 10, mostra o que sera instalado pelo winget e pede confirmacao. Depois compila o
+  app se necessario (o pacote da release ja vem compilado) e abre a TUI. Com o servico de sensores instalado, ela abre sem
   pedir permissao.
 
     wf-sys-mon             executa (instalando/compilando o que for preciso)
@@ -28,7 +28,6 @@ $released = Test-Path (Join-Path $root 'WfSysMon.dll')
 $dll     = if ($released) { Join-Path $root 'WfSysMon.dll' } else { Join-Path $outDir 'WfSysMon.dll' }
 $project = Join-Path $root 'WfSysMon.csproj'
 $dotnet  = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
-$ghPath  = Join-Path $env:ProgramFiles 'GitHub CLI\gh.exe'
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
@@ -87,6 +86,20 @@ function Get-Text($pt, $en) {
     return $en
 }
 
+# Sem o .NET o app nao abre: explica, pergunta e, se a resposta for nao, diz como instalar depois.
+function Confirm-Dotnet($id, $name) {
+    $manual = "winget install --id $id -e"
+    Write-Host ''
+    Write-Host (Get-Text "    O WF System Monitor precisa do $name para abrir, e ele nao esta instalado." "    WF System Monitor needs $name to open, and it is not installed.") -ForegroundColor Yellow
+    Write-Host (Get-Text "    Sera instalado pelo winget ($id), aceitando os termos do pacote. O Windows pode pedir permissao." "    It will be installed through winget ($id), accepting the package terms. Windows may ask for permission.") -ForegroundColor Yellow
+
+    $refused = Get-Text "nada foi instalado. Para instalar depois: $manual" "nothing was installed. To install it later: $manual"
+    if ([Console]::IsInputRedirected) { Stop-WithError $refused }
+
+    $answer = Read-Host (Get-Text '    Instalar agora? [S/n]' '    Install now? [Y/n]')
+    if ($answer -and $answer -notmatch '^[sSyY]') { Stop-WithError $refused }
+}
+
 # Compila mostrando so um indicador animado; os detalhes aparecem apenas se falhar.
 function Invoke-Build {
     $log = [IO.Path]::GetTempFileName()
@@ -128,10 +141,10 @@ function Install-SensorDriver {
     if (Test-Path $key) { Write-Ok 'Driver PawnIO ja instalado.'; return }
 
     Write-Host ''
-    Write-Host '    O PawnIO e um driver do Windows, de codigo aberto e assinado, usado para ler os sensores.' -ForegroundColor Yellow
-    Write-Host '    Sem ele, temperatura e potencia da CPU, entre outros, nao aparecem.' -ForegroundColor Yellow
-    $answer = Read-Host '    Instalar o PawnIO agora? [S/n]'
-    if ($answer -and $answer -notmatch '^[sSyY]') { Write-Ok 'Nao instalado; da para instalar depois na aba Accounts.'; return }
+    Write-Host (Get-Text '    O PawnIO e um driver do Windows, de codigo aberto e assinado, usado para ler os sensores.' '    PawnIO is an open-source, signed Windows driver used to read the sensors.') -ForegroundColor Yellow
+    Write-Host (Get-Text '    Sem ele, temperatura e potencia da CPU, entre outros, nao aparecem.' '    Without it, CPU temperature and power, among others, do not appear.') -ForegroundColor Yellow
+    $answer = Read-Host (Get-Text '    Instalar o PawnIO agora? [S/n]' '    Install PawnIO now? [Y/n]')
+    if ($answer -and $answer -notmatch '^[sSyY]') { Write-Ok (Get-Text 'Nao instalado; da para instalar depois na aba Accounts.' 'Not installed; you can install it later on the Accounts tab.'); return }
     Install-WingetPackage 'namazso.PawnIO' 'PawnIO'
 }
 
@@ -140,15 +153,15 @@ function Install-SensorDriver {
 if ($Install) { Write-Step 'Registrando o comando wf-sys-mon...'; Register-Command }
 
 if (Test-NeedsBuild) {
-    if (-not (Test-DotnetSdk)) { Install-WingetPackage 'Microsoft.DotNet.SDK.10' '.NET 10 SDK' }
+    if (-not (Test-DotnetSdk)) {
+        Confirm-Dotnet 'Microsoft.DotNet.SDK.10' '.NET 10 SDK'
+        Install-WingetPackage 'Microsoft.DotNet.SDK.10' '.NET 10 SDK'
+    }
     Invoke-Build
 }
 elseif (-not (Test-DotnetRuntime)) {
+    Confirm-Dotnet 'Microsoft.DotNet.Runtime.10' '.NET 10 Runtime'
     Install-WingetPackage 'Microsoft.DotNet.Runtime.10' '.NET 10 Runtime'
-}
-
-if (-not (Get-Command gh -ErrorAction SilentlyContinue) -and -not (Test-Path $ghPath)) {
-    Install-WingetPackage 'GitHub.cli' 'GitHub CLI'
 }
 
 if ($Install) {

@@ -504,7 +504,7 @@ sealed class TuiApp(UiActions actions)
                 (Action?)null),
             UpdateStep.Installing => (Dashboard.Loading(update.Detail ?? ""), null),
             UpdateStep.Installed => (
-                $"[bold {Theme.Warn}]v{Markup.Escape(update.Version ?? "")}[/] [{Theme.Unit}]{T("instalada; reabra o app", "installed; reopen the app")}[/]"
+                $"[bold {Theme.Warn}]v{Markup.Escape(update.Version ?? "")}[/] [{Theme.Unit}]{T("instalada; reabrindo", "installed; reopening")}[/]"
                     + (update.Detail is { } detail ? $"  [{Theme.Bad}]{Markup.Escape(detail)}[/]" : ""),
                 null),
             UpdateStep.Failed => ($"[{Theme.Bad}]{Markup.Escape(update.Detail ?? "")}[/]" + Hint(T("tentar de novo", "try again")), actions.CheckUpdate),
@@ -518,7 +518,7 @@ sealed class TuiApp(UiActions actions)
 
     void ConfirmUpdate(string version, bool updateService) => Confirm(
         [
-            T($"Baixa a versão {version} do GitHub, confere o hash e a origem do pacote e substitui os arquivos do app. Reabra o app depois.", $"Downloads version {version} from GitHub, verifies the package hash and origin, and replaces the app files. Reopen the app afterwards."),
+            T($"Baixa a versão {version} do GitHub, confere o hash e a origem do pacote e substitui os arquivos do app, que reabre sozinho.", $"Downloads version {version} from GitHub, verifies the package hash and origin, and replaces the app files. The app reopens by itself."),
             updateService
                 ? T("O serviço de sensores também é atualizado: o Windows confirma (UAC) e as leituras param por alguns segundos.", "The sensor service is updated too: Windows asks for confirmation (UAC) and the readings stop for a few seconds.")
                 : T("Preferências e histórico não são alterados.", "Preferences and history are not changed."),
