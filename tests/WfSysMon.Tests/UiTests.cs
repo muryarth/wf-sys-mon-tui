@@ -626,7 +626,7 @@ public class UiTests
         {
             var (ac, _) = NewApp();
             var linhas3 = Dump(ac.Build(Data(), w3, h3)).Split('\n');
-            foreach (var rotulo in new[] { "Cota 5h", "Cota 7 dias" })
+            foreach (var rotulo in new[] { "│ 5h ", "│ 7d " })
             {
                 var i = Array.FindIndex(linhas3, l => l.Contains(rotulo));
                 var fimBarra = linhas3[i].LastIndexOf('%') + 1;
@@ -671,14 +671,14 @@ public class UiTests
         {
             var (ag, _) = NewApp();
             var soClaude = Dump(ag.Build(Data(), lg, al));
-            Check($"{lg}x{al}: so o Claude", soClaude.Contains("INTELIG") && soClaude.Contains("Cota 5h") && !soClaude.Contains("GitHub Copilot") && !soClaude.Contains("AIC"));
+            Check($"{lg}x{al}: so o Claude", soClaude.Contains("INTELIG") && soClaude.Contains("│ 5h ") && !soClaude.Contains("GitHub Copilot") && !soClaude.Contains("AIC"));
         }
 
         settings.ShowCopilot = true;
         settings.ShowClaude = false;
         var (a51, _) = NewApp();
         var soCopilot = Dump(a51.Build(Data(), 286, 58));
-        Check("so o Copilot", soCopilot.Contains("INTELIG") && soCopilot.Contains("GitHub Copilot") && !soCopilot.Contains("Cota 5h"));
+        Check("so o Copilot", soCopilot.Contains("INTELIG") && soCopilot.Contains("GitHub Copilot") && !soCopilot.Contains("│ 5h "));
 
         settings.ShowCopilot = false;
         foreach (var (lg, al, largura) in new[] { (286, 58, 110), (143, 58, 110), (90, 81, 89), (70, 90, 69) })
@@ -686,7 +686,7 @@ public class UiTests
             var (ag, _) = NewApp();
             var quadro = ag.Build(Data(), lg, al);
             var tela = Dump(quadro);
-            Check($"{lg}x{al}: todos ocultos, a secao some", !tela.Contains("INTELIG") && !tela.Contains("Cota 5h") && !tela.Contains("GitHub Copilot") && tela.Contains("HARDWARE"));
+            Check($"{lg}x{al}: todos ocultos, a secao some", !tela.Contains("INTELIG") && !tela.Contains("│ 5h ") && !tela.Contains("GitHub Copilot") && tela.Contains("HARDWARE"));
             Check($"{lg}x{al}: hardware sozinho e centralizado", quadro.Columns.Count == 1 && quadro.Columns[0].W == largura && Math.Abs(quadro.Columns[0].X - (lg - largura) / 2) <= 1, $"x={quadro.Columns[0].X} w={quadro.Columns[0].W}");
         }
         var (a52, _) = NewApp();

@@ -505,8 +505,8 @@ static class Dashboard
 
         if (state.FiveHour is null && state.SevenDay is null && state.Month is null)
         {
-            t.AddRow(Label(T("Cota 5h", "5h quota")), FadedBar(colWidth));
-            t.AddRow(Label(T("Cota 7 dias", "7-day quota")), FadedBar(colWidth));
+            t.AddRow(Label("5h"), FadedBar(colWidth));
+            t.AddRow(Label("7d"), FadedBar(colWidth));
         }
         else if (state.FiveHour is null && state.SevenDay is null)
         {
@@ -516,8 +516,8 @@ static class Dashboard
         }
         else
         {
-            AddWindow(t, T("Cota 5h", "5h quota"), state.FiveHour, colWidth, state.Month is null);
-            AddWindow(t, T("Cota 7 dias", "7-day quota"), state.SevenDay, colWidth, state.Month is null);
+            AddWindow(t, "5h", state.FiveHour, colWidth, state.Month is null);
+            AddWindow(t, "7d", state.SevenDay, colWidth, state.Month is null);
             if (state.QuotaCapturedAt is { } at)
             {
                 var age = DateTime.Now - at;
