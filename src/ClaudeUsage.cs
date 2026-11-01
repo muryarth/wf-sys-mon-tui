@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 
 using static WfSysMon.L;
@@ -119,16 +118,23 @@ sealed class ClaudeUsage : IDisposable
                 };
             }
             catch (OperationCanceledException) { return; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
+                // Qualquer falha fica visivel no painel; a leitura continua na proxima rodada.
                 next = next with { LogsError = ex.Message, Month = next.Month ?? ClaudeTokens.Zero };
                 _nextLogsScan = DateTime.Now + LogsInterval;
             }
 
             Publish(next with { Plan = _plan, LoggedIn = _loggedIn, AccountChecked = _accountChecked });
-            await RefreshPricesAsync();
-            await RefreshPlanPricesAsync();
-            await RefreshPlanAsync();
+            try
+            {
+                await RefreshPricesAsync();
+                await RefreshPlanPricesAsync();
+                await RefreshPlanAsync();
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested) { return; }
+            catch (Exception) { /* precos e plano sao opcionais: mantem o que ja tem */ }
+
             if (!_accountChecked)
             {
                 _accountChecked = true;
@@ -203,8 +209,8 @@ sealed class ClaudeUsage : IDisposable
         try
         {
             var psi = ExternalTool.PrepareHidden("claude", "auth status --json");
-            using var proc = psi is null ? null : Process.Start(psi);
-            if (proc is null)
+            var result = psi is null ? null : await ExternalTool.RunAsync(psi, TimeSpan.FromSeconds(20), _cts.Token);
+            if (result is null)
             {
                 _loggedIn = null;
                 _plan = null;
@@ -212,20 +218,14 @@ sealed class ClaudeUsage : IDisposable
                 return;
             }
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-            timeout.CancelAfter(TimeSpan.FromSeconds(20));
-            _ = proc.StandardError.ReadToEndAsync(timeout.Token);
-            var output = await proc.StandardOutput.ReadToEndAsync(timeout.Token);
-            await proc.WaitForExitAsync(timeout.Token);
-
-            using var doc = JsonDocument.Parse(output);
-            _loggedIn = doc.RootElement.TryGetProperty("loggedIn", out var logged) && logged.ValueKind == JsonValueKind.True;
-            _plan = Str(doc.RootElement, "subscriptionType") is { Length: > 0 } type
+            using var doc = JsonDocument.Parse(result.Output);
+            _loggedIn = JsonRead.Bool(doc.RootElement, "loggedIn") == true;
+            _plan = JsonRead.Str(doc.RootElement, "subscriptionType") is { Length: > 0 } type
                 ? $"Claude {char.ToUpperInvariant(type[0])}{type[1..]}"
                 : null;
             Publish(_state with { Plan = _plan, LoggedIn = _loggedIn });
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or JsonException or OperationCanceledException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or OperationCanceledException)
         {
             // sem o CLI: o painel mostra "?"
             _loggedIn = null;
@@ -273,9 +273,9 @@ sealed class ClaudeUsage : IDisposable
 
                 fiveHour = Highest(fiveHour, five);
                 sevenDay = Highest(sevenDay, seven);
-                if (root.TryGetProperty("captured_at", out var c) && c.TryGetInt64(out var secs))
+                if (JsonRead.UnixSeconds(root, "captured_at") is { } capturedAt)
                 {
-                    var at = DateTimeOffset.FromUnixTimeSeconds(secs).LocalDateTime;
+                    var at = capturedAt.LocalDateTime;
                     if (captured is null || at > captured) captured = at;
                 }
             }
@@ -290,12 +290,12 @@ sealed class ClaudeUsage : IDisposable
 
     static ClaudeWindow? ParseWindow(JsonElement root, string name, DateTime nowUtc)
     {
-        if (!root.TryGetProperty(name, out var w) || w.ValueKind != JsonValueKind.Object) return null;
-        if (!w.TryGetProperty("used_percentage", out var pct) || pct.ValueKind != JsonValueKind.Number) return null;
-        if (!w.TryGetProperty("resets_at", out var reset) || !reset.TryGetInt64(out var secs)) return null;
+        if (JsonRead.Obj(root, name) is not { } w) return null;
+        if (JsonRead.Num(w, "used_percentage") is not { } pct) return null;
+        if (JsonRead.UnixSeconds(w, "resets_at") is not { } reset) return null;
 
-        var resetsAt = DateTimeOffset.FromUnixTimeSeconds(secs).UtcDateTime;
-        return resetsAt <= nowUtc ? null : new ClaudeWindow(pct.GetDouble(), resetsAt.ToLocalTime());
+        var resetsAt = reset.UtcDateTime;
+        return resetsAt <= nowUtc ? null : new ClaudeWindow(pct, resetsAt.ToLocalTime());
     }
 
     ClaudeWindow? WithUsage(ClaudeWindow? window, TimeSpan length)
@@ -377,36 +377,36 @@ sealed class ClaudeUsage : IDisposable
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || Str(root, "type") != "assistant") return;
-            if (!root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) return;
-            if (!message.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return;
-            if (Str(message, "id") is not { } id) return;
-            if (!DateTimeOffset.TryParse(Str(root, "timestamp"), System.Globalization.CultureInfo.InvariantCulture,
+            if (JsonRead.Str(root, "type") != "assistant") return;
+            if (JsonRead.Obj(root, "message") is not { } message) return;
+            if (JsonRead.Obj(message, "usage") is not { } usage) return;
+            if (JsonRead.Str(message, "id") is not { } id) return;
+            if (!DateTimeOffset.TryParse(JsonRead.Str(root, "timestamp"), System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out var timestamp)) return;
 
             var time = timestamp.LocalDateTime;
             var day = DateOnly.FromDateTime(time);
             if (day < _keepSince) return;
 
-            var input = Long(usage, "input_tokens");
-            var output = Long(usage, "output_tokens");
-            var cacheRead = Long(usage, "cache_read_input_tokens");
-            var cacheWrite = Long(usage, "cache_creation_input_tokens");
+            var input = JsonRead.Long(usage, "input_tokens");
+            var output = JsonRead.Long(usage, "output_tokens");
+            var cacheRead = JsonRead.Long(usage, "cache_read_input_tokens");
+            var cacheWrite = JsonRead.Long(usage, "cache_creation_input_tokens");
 
             // A escrita de cache de 1h custa mais que a de 5 min; sem o detalhe, conta como 5 min.
-            var write1h = usage.TryGetProperty("cache_creation", out var creation) && creation.ValueKind == JsonValueKind.Object
-                ? Long(creation, "ephemeral_1h_input_tokens")
+            var write1h = JsonRead.Obj(usage, "cache_creation") is { } creation
+                ? JsonRead.Long(creation, "ephemeral_1h_input_tokens")
                 : 0;
             var write5m = Math.Max(0, cacheWrite - write1h);
 
-            var model = Str(message, "model") ?? "desconhecido";
+            var model = JsonRead.Str(message, "model") ?? "desconhecido";
             var usd = ClaudePricing.Find(model) is { } price
-                ? ClaudePricing.Cost(price, input, output, cacheRead, write5m, write1h, Str(usage, "speed"), Str(usage, "inference_geo"))
+                ? ClaudePricing.Cost(price, input, output, cacheRead, write5m, write1h, JsonRead.Str(usage, "speed"), JsonRead.Str(usage, "inference_geo"))
                 : 0;
             var tokens = new ClaudeTokens(input, output, cacheRead, cacheWrite, usd);
 
             // A mesma resposta aparece em varias linhas e pode se repetir em outros logs da sessao.
-            var key = $"{id}|{Str(root, "requestId")}";
+            var key = $"{id}|{JsonRead.Str(root, "requestId")}";
             _responses[key] = _responses.TryGetValue(key, out var seen)
                 ? seen with { Tokens = seen.Tokens.Max(tokens) }
                 : new Response(day, time, model, tokens);
@@ -461,12 +461,6 @@ sealed class ClaudeUsage : IDisposable
             // sem persistencia nesta rodada: tenta de novo quando houver novo uso
         }
     }
-
-    static string? Str(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-    static long Long(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.TryGetInt64(out var n) ? n : 0;
 
     public void Dispose()
     {

@@ -13,7 +13,7 @@ static class Program
     const string RequestInstallArgument = "--request-service-install";
     const string RequestUninstallArgument = "--request-service-uninstall";
 
-    static readonly TimeSpan AnimationInterval = TimeSpan.FromMilliseconds(40);
+    static readonly TimeSpan AnimationInterval = TimeSpan.FromMilliseconds(66);
 
     // Tempo para ler o resultado antes de reabrir; um aviso sobre o servico precisa de mais.
     static readonly TimeSpan ReopenDelay = TimeSpan.FromSeconds(1.5);
@@ -374,41 +374,21 @@ static class Program
     static async Task<string?> InstallDriverAsync()
     {
         const int alreadyInstalled = -1978335189;
-        try
-        {
-            var psi = ExternalTool.PrepareHidden("winget", "install --id namazso.PawnIO -e --silent --accept-source-agreements --accept-package-agreements");
-            using var proc = psi is null ? null : Process.Start(psi);
-            if (proc is null) return T("winget indisponível; instale o PawnIO em https://pawnio.eu", "winget unavailable; install PawnIO from https://pawnio.eu");
-
-            _ = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
-            return proc.ExitCode is 0 or alreadyInstalled ? null : T($"o winget terminou com o código {proc.ExitCode}", $"winget exited with code {proc.ExitCode}");
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return T("winget indisponível; instale o PawnIO em https://pawnio.eu", "winget unavailable; install PawnIO from https://pawnio.eu");
-        }
+        var psi = ExternalTool.PrepareHidden("winget", "install --id namazso.PawnIO -e --silent --accept-source-agreements --accept-package-agreements");
+        var result = psi is null ? null : await ExternalTool.RunAsync(psi, ExternalTool.InstallLimit);
+        if (result is null) return T("winget indisponível; instale o PawnIO em https://pawnio.eu", "winget unavailable; install PawnIO from https://pawnio.eu");
+        if (result.TimedOut) return T("o winget não terminou a tempo", "winget did not finish in time");
+        return result.ExitCode is 0 or alreadyInstalled ? null : T($"o winget terminou com o código {result.ExitCode}", $"winget exited with code {result.ExitCode}");
     }
 
     // Devolve null em caso de sucesso, ou o motivo da falha.
     static async Task<string?> LogoutClaudeAsync()
     {
-        try
-        {
-            var psi = ExternalTool.PrepareHidden("claude", "auth logout");
-            using var proc = psi is null ? null : Process.Start(psi);
-            if (proc is null) return T("falha ao iniciar o Claude Code", "could not start Claude Code");
-
-            _ = proc.StandardOutput.ReadToEndAsync();
-            var error = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
-            return proc.ExitCode == 0 ? null : error.Trim();
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            return ex.Message;
-        }
+        var psi = ExternalTool.PrepareHidden("claude", "auth logout");
+        var result = psi is null ? null : await ExternalTool.RunAsync(psi, TimeSpan.FromSeconds(30));
+        if (result is null) return T("falha ao iniciar o Claude Code", "could not start Claude Code");
+        if (result.TimedOut) return T("o Claude Code não respondeu", "Claude Code did not respond");
+        return result.ExitCode == 0 ? null : result.Error.Trim();
     }
 
     // O login e feito pelo proprio Claude Code, em outra janela.

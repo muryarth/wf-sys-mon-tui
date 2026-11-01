@@ -23,7 +23,9 @@ sealed partial class Updater(
     Version? current = null,
     string? appDir = null,
     Func<string, Task<string?>>? verifyOrigin = null,
-    Func<string, Task<string?>>? refreshService = null) : IDisposable
+    Func<string, Task<string?>>? refreshService = null,
+    TimeSpan? downloadLimit = null,
+    TimeSpan? stallLimit = null) : IDisposable
 {
     const string Repo = "muryarth/wf-sys-mon-tui";
     const string Launcher = "wf-sys-mon.cmd";
@@ -38,6 +40,8 @@ sealed partial class Updater(
     readonly string _appDir = appDir ?? AppContext.BaseDirectory;
     readonly Func<string, Task<string?>> _verifyOrigin = verifyOrigin ?? VerifyOriginAsync;
     readonly Func<string, Task<string?>> _refreshService = refreshService ?? RefreshServiceAsync;
+    readonly TimeSpan _downloadLimit = downloadLimit ?? TimeSpan.FromMinutes(15);
+    readonly TimeSpan _stallLimit = stallLimit ?? TimeSpan.FromMinutes(1);
 
     ReleaseInfo? _release;
     int _busy;
@@ -147,7 +151,11 @@ sealed partial class Updater(
                 ? null
                 : T($"serviço não atualizado: {serviceFailure}", $"service not updated: {serviceFailure}"));
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (IncompleteRollbackException)
+        {
+            Fail(T("a instalação falhou e alguns arquivos não voltaram; baixe o pacote da versão de novo", "the installation failed and some files were not restored; download the release package again"));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or UnauthorizedAccessException or InvalidDataException)
         {
             Fail(T("a instalação não foi concluída; a versão atual foi mantida", "the installation did not finish; the current version was kept"));
         }
@@ -222,11 +230,29 @@ sealed partial class Updater(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            foreach (var file in added.Where(File.Exists)) File.Delete(file);
-            foreach (var (current, old) in moved) File.Move(old, current);
+            if (!Undo(added, moved)) throw new IncompleteRollbackException(ex);
             throw;
         }
     }
+
+    // Tenta desfazer cada arquivo, mesmo que outro falhe: quanto mais voltar, melhor. Devolve se tudo voltou.
+    internal static bool Undo(IEnumerable<string> added, IEnumerable<(string Current, string Old)> moved)
+    {
+        var complete = true;
+        foreach (var file in added)
+        {
+            try { File.Delete(file); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { complete = false; }
+        }
+        foreach (var (current, old) in moved)
+        {
+            try { File.Move(old, current, overwrite: true); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { complete = false; }
+        }
+        return complete;
+    }
+
+    internal sealed class IncompleteRollbackException(Exception cause) : IOException("rollback incomplete", cause);
 
     public void CleanupOldFiles()
     {
@@ -240,19 +266,25 @@ sealed partial class Updater(
 
     async Task DownloadAsync(string url, string path)
     {
-        using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        // O tempo limite do HttpClient so cobre ate os cabecalhos: o corpo precisa de limites proprios.
+        using var deadline = new CancellationTokenSource(_downloadLimit);
+        using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
         response.EnsureSuccessStatusCode();
 
-        await using var input = await response.Content.ReadAsStreamAsync();
+        await using var input = await response.Content.ReadAsStreamAsync(deadline.Token);
         await using var output = File.Create(path);
+        using var stalled = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
         var buffer = new byte[81920];
         long total = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer)) > 0)
+        while (true)
         {
+            stalled.CancelAfter(_stallLimit);
+            var read = await input.ReadAsync(buffer, stalled.Token);
+            if (read == 0) break;
+
             total += read;
             if (total > MaxPackageBytes) throw new InvalidDataException("package too large");
-            await output.WriteAsync(buffer.AsMemory(0, read));
+            await output.WriteAsync(buffer.AsMemory(0, read), deadline.Token);
         }
     }
 
@@ -268,22 +300,8 @@ sealed partial class Updater(
         var psi = ExternalTool.PrepareHidden("gh", $"attestation verify \"{zip}\" --repo {Repo} --signer-workflow {Repo}/.github/workflows/release.yml", GitHubAuth.GhDirs);
         if (psi is null) return unconfirmed;
 
-        try
-        {
-            using var process = Process.Start(psi);
-            if (process is null) return unconfirmed;
-
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-            var output = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var error = process.StandardError.ReadToEndAsync(timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
-            await Task.WhenAll(output, error);
-            return process.ExitCode == 0 ? null : unconfirmed;
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or System.ComponentModel.Win32Exception)
-        {
-            return unconfirmed;
-        }
+        var result = await ExternalTool.RunAsync(psi, TimeSpan.FromMinutes(2));
+        return result is { ExitCode: 0 } ? null : unconfirmed;
     }
 
     // Abre a versao nova no mesmo terminal e espera ela fechar. Este processo segura os arquivos
@@ -316,28 +334,16 @@ sealed partial class Updater(
     static async Task<string?> RefreshServiceAsync(string dll)
     {
         var dotnet = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
-        try
+        var result = await ExternalTool.RunAsync(new ProcessStartInfo(dotnet, $"\"{dll}\" --request-service-install")
         {
-            using var process = Process.Start(new ProcessStartInfo(dotnet, $"\"{dll}\" --request-service-install")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = Environment.SystemDirectory,
-            });
-            if (process is null) return T("falha ao iniciar", "could not start");
-
-            var output = process.StandardOutput.ReadToEndAsync();
-            var error = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            await Task.WhenAll(output, error);
-            return process.ExitCode == 0 ? null : T("confirmação não concedida", "confirmation not granted");
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return T("falha ao iniciar", "could not start");
-        }
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Environment.SystemDirectory,
+        });
+        if (result is null) return T("falha ao iniciar", "could not start");
+        return result.ExitCode == 0 ? null : T("confirmação não concedida", "confirmation not granted");
     }
 
     static HttpClient CreateClient(HttpMessageHandler? handler)

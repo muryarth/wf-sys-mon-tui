@@ -24,26 +24,32 @@ sealed class JsonlTail
         using var line = new MemoryStream();
         var consumed = offset;  // linha ainda sem '\n' fica para a proxima leitura
         int read;
-        while ((read = fs.Read(buffer, 0, buffer.Length)) > 0)
+        try
         {
-            var span = buffer.AsSpan(0, read);
-            while (true)
+            while ((read = fs.Read(buffer, 0, buffer.Length)) > 0)
             {
-                var newline = span.IndexOf((byte)'\n');
-                if (newline < 0)
+                var span = buffer.AsSpan(0, read);
+                while (true)
                 {
-                    line.Write(span);
-                    break;
-                }
+                    var newline = span.IndexOf((byte)'\n');
+                    if (newline < 0)
+                    {
+                        line.Write(span);
+                        break;
+                    }
 
-                line.Write(span[..newline]);
-                consumed += line.Length + 1;
-                onLine(line.GetBuffer().AsMemory(0, (int)line.Length));
-                line.SetLength(0);
-                span = span[(newline + 1)..];
+                    line.Write(span[..newline]);
+                    consumed += line.Length + 1;
+                    onLine(line.GetBuffer().AsMemory(0, (int)line.Length));
+                    line.SetLength(0);
+                    span = span[(newline + 1)..];
+                }
             }
         }
-
-        _offsets[path] = consumed;
+        finally
+        {
+            // Mesmo com falha: uma linha problematica nao pode travar a leitura do resto do arquivo.
+            _offsets[path] = consumed;
+        }
     }
 }

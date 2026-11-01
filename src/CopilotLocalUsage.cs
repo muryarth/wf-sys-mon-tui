@@ -54,31 +54,22 @@ sealed class CopilotLocalTokens(string? root = null)
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || Str(root, "type") != "session.usage_record") return;
-            if (Str(root, "id") is not { } id || !root.TryGetProperty("timestamp", out var ts) || !ts.TryGetDateTimeOffset(out var time)) return;
-            if (!root.TryGetProperty("data", out var data) || !data.TryGetProperty("usage", out var usage)) return;
+            if (JsonRead.Str(root, "type") != "session.usage_record") return;
+            if (JsonRead.Str(root, "id") is not { } id || JsonRead.Date(root, "timestamp") is not { } time) return;
+            if (JsonRead.Obj(root, "data") is not { } data || JsonRead.Obj(data, "usage") is not { } usage) return;
 
             // inputTokens inclui os tokens de cache.
-            var cacheRead = Long(usage, "cacheReadTokens");
-            var cacheWrite = Long(usage, "cacheWriteTokens");
-            var input = Math.Max(0, Long(usage, "inputTokens") - cacheRead - cacheWrite);
+            var cacheRead = JsonRead.Long(usage, "cacheReadTokens");
+            var cacheWrite = JsonRead.Long(usage, "cacheWriteTokens");
+            var input = Math.Max(0, JsonRead.Long(usage, "inputTokens") - cacheRead - cacheWrite);
 
-            var nano = usage.TryGetProperty("copilotUsage", out var cost) && cost.ValueKind == JsonValueKind.Object
-                       && cost.TryGetProperty("totalNanoAiu", out var n) && n.ValueKind == JsonValueKind.Number
-                ? n.GetDouble()
-                : 0;
+            var nano = JsonRead.Obj(usage, "copilotUsage") is { } cost ? JsonRead.Num(cost, "totalNanoAiu") ?? 0 : 0;
 
             _records[id] = new Record(time.UtcDateTime,
-                new CopilotLocalUsage(input, Long(usage, "outputTokens"), cacheRead, cacheWrite, nano / NanoPerCredit));
+                new CopilotLocalUsage(input, JsonRead.Long(usage, "outputTokens"), cacheRead, cacheWrite, nano / NanoPerCredit));
         }
         catch (JsonException) { /* linha invalida: ignora */ }
     }
-
-    static string? Str(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-    static long Long(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var v) && v.TryGetInt64(out var n) ? n : 0;
 
     sealed record Record(DateTime TimeUtc, CopilotLocalUsage Usage);
 }

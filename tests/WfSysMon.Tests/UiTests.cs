@@ -81,6 +81,37 @@ public class UiTests
 
     static bool HasGh = true;
 
+    // Janela de login fechada sem concluir: o app nao pode consultar a conta para sempre.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AbandonedClaudeLoginStopsWaiting(bool expired)
+    {
+        var language = Settings.Current.Language;
+        Settings.Current.Language = "pt";
+        try
+        {
+            var data = Data(admin: false, needsLogin: true, claudeLogged: false);
+            var (app, log) = NewApp();
+            if (expired) app.ClaudeLoginWait = TimeSpan.Zero;
+
+            app.Build(data, 90, 81);
+            app.Handle(new KeyInput(ConsoleKey.A, 'a'));
+            app.Build(data, 90, 81);
+            app.Handle(new KeyInput(ConsoleKey.DownArrow, '\0'));
+            app.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+            Assert.Contains("claude", log);
+
+            var screen = Dump(app.Build(data, 90, 81));
+
+            Assert.Equal(!expired, screen.Contains("Aguardando o login"));
+        }
+        finally
+        {
+            Settings.Current.Language = language;
+        }
+    }
+
     static (TuiApp App, List<string> Log) NewApp()
     {
         var log = new List<string>();
