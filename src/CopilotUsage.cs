@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
+using static WfSysMon.L;
+
 namespace WfSysMon;
 
 record CopilotSnapshot(
@@ -13,6 +15,7 @@ record CopilotSnapshot(
     double Used,
     double Remaining,
     double PercentRemaining,
+    double ExtraBudget,       // extra budget configurado (overage_entitlement), na mesma unidade da cota
     DateTime? ResetDate,
     DateTime FetchedAt);
 
@@ -22,33 +25,42 @@ record CopilotState(
     bool Loading,
     bool NeedsLogin,
     DateTime? NextRefresh,
-    ModelList Models,
-    int Version);
+    CopilotLocalUsage? Local,
+    int Version,
+    CopilotCycle? LastCycle = null);
 
 // Busca periodicamente o uso do plano GitHub Copilot do usuario.
-// Usa o endpoint (nao documentado) copilot_internal/user, o mesmo usado pelo VS Code / Copilot CLI.
-// Ele consome a cota "core" da API do GitHub (5.000 req/h); 1 req/min = 60 req/h.
+// Usa o endpoint (nao documentado) copilot_internal/user, o mesmo usado pelo VS Code / Copilot CLI,
+// identificando-se como wf-sys-mon.
+// Ele consome a cota "core" da API do GitHub (5.000 req/h); 1 req a cada 30 s = 120 req/h.
 sealed class CopilotUsage : IDisposable
 {
+    public static string NotConnectedMessage => T("conta do GitHub não conectada", "GitHub account not connected");
+
     public const double UsdPerCredit = 0.01;          // 1 AI credit = US$ 0,01
     public const double UsdPerPremiumRequest = 0.04;  // cobranca legada por requisicao premium
 
-    static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
+    static TimeSpan RefreshInterval => TimeSpan.FromSeconds(Settings.Current.CopilotSeconds);
     static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(1);
-    static readonly TimeSpan ModelsRetryInterval = TimeSpan.FromMinutes(30);
 
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     readonly CancellationTokenSource _cts = new();
-    readonly SemaphoreSlim _wake = new(0);
-    volatile CopilotState _state = new(null, null, true, false, null, ModelCatalog.LoadCachedOrFallback(), 0);
-    DateTime _nextModelsFetch = DateTime.MinValue;
+    readonly SemaphoreSlim _wake = new(0, 1);
+    internal int PendingWakeups => _wake.CurrentCount;
+    readonly CopilotLocalTokens _localTokens = new();
+    readonly CopilotCycleHistory _history = new();
+    volatile CopilotState _state = new(null, null, true, false, null, null, 0);
     string? _token;
 
     public CopilotState State => _state;
 
     public void Start() => _ = Task.Run(LoopAsync);
 
-    public void RefreshNow() => _wake.Release();
+    public void RefreshNow()
+    {
+        try { _wake.Release(); }
+        catch (SemaphoreFullException) { /* ja ha uma consulta pendente: nao acumula */ }
+    }
 
     // Chamado apos um novo login: descarta o token em memoria e consulta imediatamente.
     public void ResetToken()
@@ -62,14 +74,15 @@ sealed class CopilotUsage : IDisposable
         while (!_cts.IsCancellationRequested)
         {
             Update(s => s with { Loading = true });
-            await RefreshModelsAsync();
 
             TimeSpan wait;
             try
             {
                 var snap = await FetchAsync(_cts.Token);
+                var local = ReadLocalTokens(snap);
+                var lastCycle = _history.Record(snap);
                 wait = RefreshInterval;
-                Update(s => s with { Snapshot = snap, Error = null, Loading = false, NeedsLogin = false, NextRefresh = DateTime.Now + wait });
+                Update(s => s with { Snapshot = snap, Local = local, LastCycle = lastCycle, Error = null, Loading = false, NeedsLogin = false, NextRefresh = DateTime.Now + wait });
             }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
@@ -96,28 +109,13 @@ sealed class CopilotUsage : IDisposable
         }
     }
 
-    async Task RefreshModelsAsync()
+    // Soma o ciclo atual, que termina na data de renovacao informada pela API.
+    CopilotLocalUsage? ReadLocalTokens(CopilotSnapshot snap)
     {
-        if (DateTime.Now < _nextModelsFetch) return;
-
-        // lista vinda da rede/cache ainda dentro da validade: agenda a proxima busca e sai
-        var models = _state.Models;
-        if (models.UpdatedAt + ModelCatalog.MaxAge > DateTime.Now)
-        {
-            _nextModelsFetch = models.UpdatedAt + ModelCatalog.MaxAge;
-            return;
-        }
-
-        try
-        {
-            var fresh = await ModelCatalog.FetchAsync(_http, _cts.Token);
-            Update(s => s with { Models = fresh });
-            _nextModelsFetch = DateTime.Now + ModelCatalog.MaxAge;
-        }
-        catch (Exception)
-        {
-            _nextModelsFetch = DateTime.Now + ModelsRetryInterval; // mantem cache/lista embutida
-        }
+        var now = DateTime.UtcNow;
+        var start = snap.ResetDate?.AddMonths(-1) ?? new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        try { return _localTokens.Read(start); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return _state.Local; }
     }
 
     void Update(Func<CopilotState, CopilotState> change)
@@ -129,28 +127,26 @@ sealed class CopilotUsage : IDisposable
     async Task<CopilotSnapshot> FetchAsync(CancellationToken ct)
     {
         _token ??= ResolveToken()
-            ?? throw new NotAuthenticatedException("conta do GitHub nao conectada");
+            ?? throw new NotAuthenticatedException(NotConnectedMessage);
 
         using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/copilot_internal/user");
         req.Headers.Authorization = new AuthenticationHeaderValue("token", _token);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        req.Headers.UserAgent.ParseAdd("GitHubCopilotChat/0.35.0");
-        req.Headers.Add("Editor-Version", "vscode/1.107.0");
-        req.Headers.Add("Editor-Plugin-Version", "copilot-chat/0.35.0");
+        req.Headers.UserAgent.ParseAdd("wf-sys-mon");
 
         using var resp = await _http.SendAsync(req, ct);
 
         if (resp.StatusCode == HttpStatusCode.Unauthorized)
         {
             _token = null;
-            throw new NotAuthenticatedException("sessao do GitHub expirada (HTTP 401)");
+            throw new NotAuthenticatedException(T("sessão do GitHub expirada (HTTP 401)", "GitHub session expired (HTTP 401)"));
         }
         if (RateLimitWait(resp) is { } retry)
             throw new RateLimitedException(retry);
         if (resp.StatusCode == HttpStatusCode.NotFound)
-            throw new InvalidOperationException("conta sem GitHub Copilot ativo (HTTP 404)");
+            throw new InvalidOperationException(T("conta sem GitHub Copilot ativo (HTTP 404)", "account has no active GitHub Copilot (HTTP 404)"));
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"HTTP {(int)resp.StatusCode} ao consultar o Copilot");
+            throw new InvalidOperationException(T($"HTTP {(int)resp.StatusCode} ao consultar o Copilot", $"HTTP {(int)resp.StatusCode} while querying Copilot"));
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStreamAsync(ct));
         return Parse(doc.RootElement);
@@ -176,7 +172,7 @@ sealed class CopilotUsage : IDisposable
     static string? Header(HttpResponseMessage resp, string name) =>
         resp.Headers.TryGetValues(name, out var v) ? v.FirstOrDefault() : null;
 
-    static CopilotSnapshot Parse(JsonElement root)
+    internal static CopilotSnapshot Parse(JsonElement root)
     {
         var plan = Str(root, "copilot_plan") ?? Str(root, "access_type_sku") ?? "desconhecido";
         var tbb = Bool(root, "token_based_billing") ?? false;
@@ -189,7 +185,7 @@ sealed class CopilotUsage : IDisposable
 
         if (!root.TryGetProperty("quota_snapshots", out var snaps) ||
             !snaps.TryGetProperty("premium_interactions", out var p))
-            return new CopilotSnapshot(plan, tbb, false, 0, 0, 0, 100, reset, DateTime.Now);
+            throw new InvalidOperationException(T("resposta do Copilot sem dados de cota", "Copilot response has no quota data"));
 
         var unlimited = Bool(p, "unlimited") ?? false;
         var entitlement = Num(p, "entitlement") ?? 0;
@@ -199,8 +195,10 @@ sealed class CopilotUsage : IDisposable
             ? cu
             : Math.Max(0, entitlement - remaining);
 
+        var extraBudget = Bool(p, "overage_permitted") == true ? Num(p, "overage_entitlement") ?? 0 : 0;
+
         return new CopilotSnapshot(plan, Bool(p, "token_based_billing") ?? tbb, unlimited,
-            entitlement, used, remaining, pctRemaining, reset, DateTime.Now);
+            entitlement, used, remaining, pctRemaining, extraBudget, reset, DateTime.Now);
     }
 
     static string? Str(JsonElement e, string name) =>
@@ -218,16 +216,18 @@ sealed class CopilotUsage : IDisposable
         foreach (var env in new[] { "GH_TOKEN", "GITHUB_TOKEN" })
             if (Environment.GetEnvironmentVariable(env) is { Length: > 0 } t) return t.Trim();
 
-        if (GitHubAuth.FindGh() is not { } gh) return null;
         try
         {
-            using var proc = Process.Start(new ProcessStartInfo(gh, "auth token --hostname github.com")
+            if (GitHubAuth.FindGh() is not { } gh) return null;
+            var psi = new ProcessStartInfo(gh, "auth token --hostname github.com")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-            });
+                WorkingDirectory = Environment.SystemDirectory,
+            };
+            using var proc = Process.Start(psi);
             if (proc is null) return null;
             _ = proc.StandardError.ReadToEndAsync();
             var output = proc.StandardOutput.ReadToEnd().Trim();
@@ -249,7 +249,7 @@ sealed class CopilotUsage : IDisposable
     sealed class NotAuthenticatedException(string message) : Exception(message);
 
     sealed class RateLimitedException(TimeSpan retryAfter)
-        : Exception($"limite de requisicoes do GitHub atingido - nova tentativa em {Math.Ceiling(retryAfter.TotalMinutes)} min")
+        : Exception(T($"limite de requisições do GitHub atingido; nova tentativa em {Math.Ceiling(retryAfter.TotalMinutes)} min", $"GitHub rate limit reached; retrying in {Math.Ceiling(retryAfter.TotalMinutes)} min"))
     {
         public TimeSpan RetryAfter { get; } = retryAfter;
     }

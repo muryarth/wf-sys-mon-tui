@@ -2,15 +2,20 @@
   wf-sys-mon - inicializador do Workflow System Monitor.
 
   Na primeira execucao instala o que faltar (.NET 10 e GitHub CLI, via winget),
-  compila o app se necessario e abre a TUI como administrador.
+  compila o app se necessario e abre a TUI. Com o servico de sensores instalado, ela abre sem
+  pedir permissao.
 
     wf-sys-mon             executa (instalando/compilando o que for preciso)
-    wf-sys-mon -Install    registra o comando 'wf-sys-mon' no PATH do usuario
+    wf-sys-mon -Install    registra o comando 'wf-sys-mon' no PATH do usuario, configura a status
+                           line do Claude Code (sem sobrescrever uma existente) e instala o
+                           servico de sensores (o Windows confirma uma vez)
+    wf-sys-mon -Uninstall  remove o servico de sensores
     wf-sys-mon -Rebuild    forca a recompilacao antes de executar
 #>
 [CmdletBinding()]
 param(
     [switch]$Install,
+    [switch]$Uninstall,
     [switch]$Rebuild,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$AppArgs
 )
@@ -69,34 +74,62 @@ function Register-Command {
     }
 }
 
-$sudo     = Join-Path $env:SystemRoot 'System32\sudo.exe'
-$sudoKey  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo'
-function Get-SudoMode { (Get-ItemProperty $sudoKey -ErrorAction SilentlyContinue).Enabled }
-
-# A TUI so abre no mesmo terminal com o sudo do Windows em modo Inline (Enabled = 3).
-function Enable-InlineSudo {
-    if (-not (Test-Path $sudo)) {
-        Write-Host '    sudo do Windows indisponivel (requer Windows 11 24H2+). A TUI abrira em uma nova janela,' -ForegroundColor Yellow
-        Write-Host '    a menos que o terminal ja esteja aberto como administrador.' -ForegroundColor Yellow
-        return
+# Idioma escolhido no app; o padrao e ingles.
+function Get-Text($pt, $en) {
+    try {
+        $file = Join-Path $env:LOCALAPPDATA 'wf-sys-mon\settings.json'
+        if ((Get-Content $file -Raw | ConvertFrom-Json).Language -eq 'pt') { return $pt }
     }
-    if ((Get-SudoMode) -eq 3) { Write-Ok 'sudo inline ja habilitado.'; return }
+    catch { }
+    return $en
+}
+
+# Compila mostrando so um indicador animado; os detalhes aparecem apenas se falhar.
+function Invoke-Build {
+    $log = [IO.Path]::GetTempFileName()
+    $err = [IO.Path]::GetTempFileName()
+    $arguments = "publish `"$project`" -c Release -o `"$outDir`" --nologo -v quiet"
+    $build = Start-Process -FilePath $dotnet -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError $err
+    [void]$build.Handle  # necessario para ler o ExitCode depois
+
+    $text = Get-Text 'Preparando o WF System Monitor...' 'Preparing WF System Monitor...'
+    $frames = '|', '/', '-', '\'
+    $i = 0
+    # Sem console (redirecionado ou em CI) nao ha cursor para esconder.
+    try { [Console]::CursorVisible = $false } catch { }
+    try {
+        while (-not $build.HasExited) {
+            Write-Host "`r  " -NoNewline
+            Write-Host $frames[$i++ % 4] -NoNewline -ForegroundColor Cyan
+            Write-Host " $text" -NoNewline -ForegroundColor DarkGray
+            Start-Sleep -Milliseconds 120
+        }
+    }
+    finally {
+        try { [Console]::CursorVisible = $true } catch { }
+    }
+    Write-Host ("`r" + (' ' * ($text.Length + 6)) + "`r") -NoNewline
+
+    $build.WaitForExit()
+    if ($build.ExitCode -ne 0) {
+        Get-Content $log, $err | Select-Object -Last 20 | Write-Host
+        Remove-Item $log, $err -ErrorAction SilentlyContinue
+        Stop-WithError (Get-Text 'falha na compilacao.' 'build failed.')
+    }
+    Remove-Item $log, $err -ErrorAction SilentlyContinue
+}
+
+# Driver de sensores usado pela biblioteca (temperatura e potencia da CPU, entre outros).
+function Install-SensorDriver {
+    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO'
+    if (Test-Path $key) { Write-Ok 'Driver PawnIO ja instalado.'; return }
 
     Write-Host ''
-    Write-Host '    Para abrir a TUI no mesmo terminal, o sudo do Windows precisa estar no modo Inline.' -ForegroundColor Yellow
-    Write-Host '    Isso vale para todo o sistema: qualquer comando com sudo passa a rodar elevado no' -ForegroundColor Yellow
-    Write-Host '    terminal atual (o UAC continua pedindo confirmacao).' -ForegroundColor Yellow
-    $answer = Read-Host '    Habilitar o sudo inline agora? [S/n]'
-    if ($answer -and $answer -notmatch '^[sSyY]') { Write-Ok 'Mantido como esta; a TUI abrira em uma nova janela.'; return }
-
-    Write-Step 'Habilitando sudo inline (confirme no UAC)...'
-    try {
-        Start-Process $sudo -ArgumentList 'config', '--enable', 'normal' -Verb RunAs -Wait -WindowStyle Hidden
-    }
-    catch { Write-Host "    nao foi possivel habilitar: $($_.Exception.Message)" -ForegroundColor Yellow; return }
-
-    if ((Get-SudoMode) -eq 3) { Write-Ok 'sudo inline habilitado.' }
-    else { Write-Host '    sudo inline nao foi habilitado. Ative em Configuracoes > Sistema > Para desenvolvedores > sudo (modo Embutido).' -ForegroundColor Yellow }
+    Write-Host '    O PawnIO e um driver do Windows, de codigo aberto e assinado, usado para ler os sensores.' -ForegroundColor Yellow
+    Write-Host '    Sem ele, temperatura e potencia da CPU, entre outros, nao aparecem.' -ForegroundColor Yellow
+    $answer = Read-Host '    Instalar o PawnIO agora? [S/n]'
+    if ($answer -and $answer -notmatch '^[sSyY]') { Write-Ok 'Nao instalado; da para instalar depois na aba Accounts.'; return }
+    Install-WingetPackage 'namazso.PawnIO' 'PawnIO'
 }
 
 # ------------------------------------------------------------------ dependencias
@@ -105,10 +138,7 @@ if ($Install) { Write-Step 'Registrando o comando wf-sys-mon...'; Register-Comma
 
 if (Test-NeedsBuild) {
     if (-not (Test-DotnetSdk)) { Install-WingetPackage 'Microsoft.DotNet.SDK.10' '.NET 10 SDK' }
-    Write-Step 'Compilando o WfSysMon...'
-    & $dotnet publish $project -c Release -o $outDir --nologo -v quiet
-    if ($LASTEXITCODE -ne 0) { Stop-WithError 'falha na compilacao.' }
-    Write-Ok 'Compilado em out\'
+    Invoke-Build
 }
 elseif (-not (Test-DotnetRuntime)) {
     Install-WingetPackage 'Microsoft.DotNet.Runtime.10' '.NET 10 Runtime'
@@ -119,25 +149,28 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue) -and -not (Test-Path $gh
 }
 
 if ($Install) {
-    Enable-InlineSudo
+    Write-Step 'Configurando a status line do Claude Code...'
+    & $dotnet $dll --setup-claude-statusline (Join-Path $root 'claude-statusline.ps1')
+    if ($LASTEXITCODE -ne 0) { Write-Host '    A cota do Claude nao aparecera na TUI ate isso ser resolvido.' -ForegroundColor Yellow }
+
+    Install-SensorDriver
+
+    Write-Step 'Instalando o servico de sensores (confirme no UAC)...'
+    & $dotnet $dll --request-service-install
+    if ($LASTEXITCODE -ne 0) { Write-Host '    Sem o servico, a TUI oferece instalar ao abrir, ou roda em modo limitado.' -ForegroundColor Yellow }
+
     Write-Ok 'Pronto! Use o comando wf-sys-mon em um novo terminal.'
     exit 0
 }
 
+if ($Uninstall) {
+    Write-Step 'Removendo o servico de sensores (confirme no UAC)...'
+    & $dotnet $dll --request-service-uninstall
+    exit $LASTEXITCODE
+}
+
 # ------------------------------------------------------------------ execucao
 
-# Sensores exigem administrador. Com o sudo do Windows em modo inline (Enabled = 3) a TUI abre
-# neste mesmo terminal; caso contrario o proprio app solicita UAC e abre um novo console.
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if (-not $isAdmin -and (Test-Path $sudo) -and (Get-SudoMode) -eq 3) {
-    & $sudo $dotnet $dll @AppArgs
-}
-else {
-    if (-not $isAdmin -and (Test-Path $sudo)) {
-        Write-Host 'A TUI abrira em uma nova janela. Para usar este terminal, rode: wf-sys-mon -Install' -ForegroundColor DarkGray
-    }
-    & $dotnet $dll @AppArgs
-}
+# A TUI roda como usuario comum: os sensores vem do servico, e ela explica o que fazer se ele faltar.
+& $dotnet $dll @AppArgs
 exit $LASTEXITCODE
