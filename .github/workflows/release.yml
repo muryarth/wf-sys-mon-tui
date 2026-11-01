@@ -52,10 +52,10 @@ jobs:
         run: |
           New-Item -ItemType Directory dist | Out-Null
           $zip = "wf-sys-mon-$env:VERSION-win-x64.zip"
-          Copy-Item LICENSE, packaging/wf-sys-mon.cmd publish/
+          Copy-Item LICENSE, wf-sys-mon.cmd, wf-sys-mon.ps1 publish/
           Compress-Archive -Path publish/* -DestinationPath "dist/$zip"
           $hash = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $zip" | Out-File "dist/$zip.sha256" -Encoding ascii
+          Set-Content "dist/$zip.sha256" -Value "$hash  $zip`n" -NoNewline -Encoding ascii
           "zip=dist/$zip" >> $env:GITHUB_OUTPUT
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

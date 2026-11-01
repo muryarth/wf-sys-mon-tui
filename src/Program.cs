@@ -88,6 +88,9 @@ static class Program
         using var claude = new ClaudeUsage();
         claude.Start();
 
+        using var updater = new Updater();
+        updater.CleanupOldFiles();
+
         var app = new TuiApp(new UiActions(
             Refresh: () => { copilot.RefreshNow(); claude.CheckAccountNow(); },
             LoginGitHub: auth.Start,
@@ -110,6 +113,8 @@ static class Program
             InstallDriver: done => _ = Task.Run(async () => done(await InstallDriverAsync())),
             InstallService: done => _ = Task.Run(async () => done(await ServiceInstaller.RequestAsync(ServiceInstaller.InstallArgument))),
             RemoveService: done => _ = Task.Run(async () => done(await ServiceInstaller.RequestAsync(ServiceInstaller.UninstallArgument))),
+            CheckUpdate: updater.Check,
+            InstallUpdate: updater.Install,
             Quit: cts.Cancel));
 
         using var input = new InputReader();
@@ -123,6 +128,7 @@ static class Program
             var lastCopilotVersion = -1;
             var lastClaudeVersion = -1;
             var lastAuth = auth.State;
+            var lastUpdate = updater.State;
             var dirty = false;
             var clearFirst = false;
             var lastAnimation = DateTime.Now;
@@ -202,6 +208,14 @@ static class Program
                     dirty = true;
                 }
 
+                var ustate = updater.State;
+                if (!ReferenceEquals(ustate, lastUpdate))
+                {
+                    lastUpdate = ustate;
+                    dirty = true;
+                }
+                dirty |= ustate.Step is UpdateStep.Checking or UpdateStep.Installing;
+
                 // O indicador de "carregando" precisa girar mesmo sem novas leituras.
                 dirty |= Dashboard.IsLoading(local?.Hardware ?? Volatile.Read(ref remoteHardware), cstate, clstate);
 
@@ -215,7 +229,7 @@ static class Program
                             : isAdmin ? SensorMode.Elevated
                             : SensorMode.Limited;
 
-                        var data = new UiData(hardware, cstate, clstate, astate, mode, LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled);
+                        var data = new UiData(hardware, cstate, clstate, astate, mode, LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled, ustate, updater.CanInstall);
                         var frame = app.Build(data, size.W, size.H);
                         Screen.DrawRows(frame.Rows, clearFirst || app.TakeClearRequest());
                         dirty = false;

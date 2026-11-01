@@ -84,7 +84,7 @@ public class UiTests
     static (TuiApp App, List<string> Log) NewApp()
     {
         var log = new List<string>();
-        var app = new TuiApp(new UiActions(() => log.Add("refresh"), () => log.Add("github"), () => HasGh, () => log.Add("claude"), done => { log.Add("logout-github"); done(null); }, done => { log.Add("logout-claude"); done("erro de teste"); }, () => log.Add("check"), done => { log.Add("driver"); done(null); }, done => { log.Add("install-service"); done(null); }, done => { log.Add("remove-service"); done(null); }, () => log.Add("quit")));
+        var app = new TuiApp(new UiActions(() => log.Add("refresh"), () => log.Add("github"), () => HasGh, () => log.Add("claude"), done => { log.Add("logout-github"); done(null); }, done => { log.Add("logout-claude"); done("erro de teste"); }, () => log.Add("check"), done => { log.Add("driver"); done(null); }, done => { log.Add("install-service"); done(null); }, done => { log.Add("remove-service"); done(null); }, () => log.Add("check-update"), service => log.Add(service ? "install-update+service" : "install-update"), () => log.Add("quit")));
         return (app, log);
     }
 
@@ -607,6 +607,44 @@ public class UiTests
         a15.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
         Check("Enter volta para portugues", settings.Language == "pt");
         settings.Icons = true;
+
+        // Atualizacoes
+        var (a30, log30) = NewApp();
+        a30.Build(Data(), 90, 81);
+        a30.Handle(new KeyInput(ConsoleKey.S, 's'));
+        a30.Build(Data(), 90, 81);
+        a30.Handle(new KeyInput(ConsoleKey.UpArrow, '\0'));
+        f = a30.Build(Data(), 90, 81);
+        var linhaVersao = Dump(f).Split('\n').First(l => l.Contains("Versão"));
+        Check("versao aparece com a acao", linhaVersao.Contains(Updater.CurrentVersion.ToString()) && linhaVersao.Contains("procurar"), linhaVersao.Trim());
+        a30.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+        Check("procurar so a pedido", log30.Contains("check-update"));
+
+        var novaVersao = Data() with { Update = new UpdateState(UpdateStep.Available, "9.9.9"), CanInstallUpdate = true };
+        a30.Build(novaVersao, 90, 81);
+        Check("nova versao aparece", Dump(a30.Build(novaVersao, 90, 81)).Contains("v9.9.9"));
+        a30.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+        f = a30.Build(novaVersao, 90, 81);
+        Check("instalar pede confirmacao", Dump(f).Contains("Confirmar") && Dump(f).Contains("9.9.9") && Dump(f).Contains("UAC") && !log30.Any(l => l.StartsWith("install-update")));
+        a30.Handle(new KeyInput(ConsoleKey.N, 'n'));
+        a30.Build(novaVersao, 90, 81);
+        Check("N nao instala", !log30.Any(l => l.StartsWith("install-update")));
+        a30.Handle(new KeyInput(ConsoleKey.Enter, '\r'));
+        a30.Build(novaVersao, 90, 81);
+        a30.Handle(new KeyInput(ConsoleKey.S, 's'));
+        Check("confirmar instala e atualiza o servico", log30.Contains("install-update+service"));
+
+        var (a31, log31) = NewApp();
+        var doFonte = Data() with { Update = new UpdateState(UpdateStep.Available, "9.9.9"), CanInstallUpdate = false };
+        a31.Build(doFonte, 90, 81);
+        a31.Handle(new KeyInput(ConsoleKey.S, 's'));
+        var telaFonte = Dump(a31.Build(doFonte, 90, 81));
+        Check("instalado pelo git: orienta e nao instala", telaFonte.Contains("git pull") && !log31.Any(l => l.StartsWith("install-update")));
+        var (a32, _) = NewApp();
+        var instalada = Data() with { Update = new UpdateState(UpdateStep.Installed, "9.9.9") };
+        a32.Build(instalada, 90, 81);
+        a32.Handle(new KeyInput(ConsoleKey.S, 's'));
+        Check("instalada pede para reabrir", Dump(a32.Build(instalada, 90, 81)).Contains("reabra o app"));
 
         // Icones desligados
         settings.Icons = false;

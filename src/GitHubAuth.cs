@@ -137,7 +137,7 @@ sealed partial class GitHubAuth : IDisposable
         catch (Exception) { /* o usuario ainda ve a URL na tela */ }
     }
 
-    static readonly string[] GhDirs =
+    internal static readonly string[] GhDirs =
     [
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "GitHub CLI"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "GitHub CLI"),
